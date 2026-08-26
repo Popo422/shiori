@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/lib/api.ts","./src/lib/constants.ts","./src/lib/db.ts","./src/lib/position.ts","./src/lib/velocity.ts","./src/reader/foliateview.tsx","./src/reader/useillustrator.ts","./src/ui/illustration.tsx","./src/ui/library.tsx","./src/ui/reader.tsx","./vite.config.ts"],"version":"5.9.3"}

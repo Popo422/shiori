@@ -31,11 +31,5 @@
       "database_id": "c29a8781-1bb2-421f-99d1-ed8b46b538ef",
       "migrations_dir": "migrations"
     }
-  ],
-
-  // Generation runs here so requests return immediately.
-  "queues": {
-    "producers": [{ "binding": "RENDER_QUEUE", "queue": "shiori-render" }],
-    "consumers": [{ "queue": "shiori-render", "max_batch_size": 5, "max_retries": 2 }]
-  }
+  ]
 }

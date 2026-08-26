@@ -100,11 +100,6 @@ button {
   font-size: 0.95rem;
 }
 
-.library__busy {
-  color: var(--ink-soft);
-  font-size: 0.85rem;
-}
-
 .empty {
   border: 1px dashed var(--rule);
   border-radius: var(--radius);
@@ -472,4 +467,60 @@ button {
   .shelf__remove {
     transition: none;
   }
+}
+
+/* ------------------------- Feedback: busy, notice, drag ------------------- */
+
+.library__busy {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  align-self: center;
+}
+
+.spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--rule);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  padding: 0.75rem 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.notice__close {
+  flex: none;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  padding: 0.25rem;
+}
+
+/* The whole page is a drop target; say so while a file is over it. */
+.library.is-dragging .empty,
+.library.is-dragging .shelf {
+  outline: 2px dashed var(--accent);
+  outline-offset: 0.75rem;
+  border-radius: var(--radius);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2s; }
 }

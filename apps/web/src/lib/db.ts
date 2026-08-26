@@ -31,8 +31,16 @@ export async function saveBook(book: StoredBook): Promise<void> {
   await db.books.put(book);
 }
 
+/**
+ * Most recently read first, then newly added.
+ *
+ * Sorted in memory rather than with orderBy: IndexedDB omits records whose
+ * indexed key is null, so a never-opened book (lastOpenedAt === null) would be
+ * saved and then silently never listed.
+ */
 export async function listBooks(): Promise<StoredBook[]> {
-  return db.books.orderBy('lastOpenedAt').reverse().toArray();
+  const all = await db.books.toArray();
+  return all.sort((a, b) => (b.lastOpenedAt ?? b.addedAt) - (a.lastOpenedAt ?? a.addedAt));
 }
 
 export async function getBook(id: string): Promise<StoredBook | undefined> {

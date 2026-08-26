@@ -3,10 +3,10 @@ import { cors } from 'hono/cors';
 import { drizzle } from 'drizzle-orm/d1';
 import { eq, and, inArray } from 'drizzle-orm';
 import { books, beats, characters, illustrations } from '@shiori/db';
-import { STYLE, dimensionsFor, illustrationKey } from '@shiori/core';
+import { STYLE, dimensionsFor, illustrationKey, type Beat } from '@shiori/core';
 import { analyzeSection } from './analyze';
 import { renderBeat, renderReferenceSheet } from './generate';
-import type { Env, RenderJob } from './env';
+import type { Env } from './env';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -158,12 +158,12 @@ app.post('/api/art', async (c) => {
       });
     }
 
-    // Queues rejects an empty batch, and beatIds may reference beats we have not
-    // analyzed yet, so only enqueue what actually resolved.
-    if (targets.length > 0) {
-      await c.env.RENDER_QUEUE.sendBatch(
-        targets.map((b) => ({ body: { bookId, beatId: b.id, styleId: STYLE.id } })),
-      );
+    // Render after the response is sent. waitUntil allows 30s of background work
+    // per request, which comfortably covers one image (~5-15s), and each beat
+    // arrives as its own request, so a lookahead window renders in parallel
+    // rather than queueing behind itself.
+    for (const beat of targets) {
+      c.executionCtx.waitUntil(renderAndStore(c.env, { ...beat, bookId }));
     }
   }
 
@@ -200,64 +200,55 @@ app.get('/api/art/:bookId/:beatId', async (c) => {
 
 app.get('/api/health', (c) => c.json({ ok: true }));
 
-export default {
-  fetch: (req: Request, env: Env, ctx: ExecutionContext) => app.fetch(req, env, ctx),
+/**
+ * Render one beat and record the result.
+ *
+ * Runs inside waitUntil rather than a queue consumer: the free plan allows 30s
+ * of background work after the response, which covers a single image with room
+ * to spare, and keeps the whole app inside free tiers. Duplicate work is
+ * prevented by the pending row claimed in D1, not by the queue, so nothing is
+ * lost by rendering here.
+ */
+async function renderAndStore(env: Env, beat: Beat & { bookId: string }): Promise<void> {
+  const db = drizzle(env.DB);
 
-  /** Renders queued beats off the request path. */
-  async queue(batch: MessageBatch<RenderJob>, env: Env): Promise<void> {
-    const db = drizzle(env.DB);
+  const markFailed = (reason: string) =>
+    db
+      .update(illustrations)
+      .set({ status: 'failed', error: reason.slice(0, 500) })
+      .where(and(eq(illustrations.beatId, beat.id), eq(illustrations.styleId, STYLE.id)));
 
-    for (const message of batch.messages) {
-      const { bookId, beatId, styleId } = message.body;
-      try {
-        const [beat] = await db.select().from(beats).where(eq(beats.id, beatId)).limit(1);
-        if (!beat) {
-          message.ack();
-          continue;
+  try {
+    const cast = await db.select().from(characters).where(eq(characters.bookId, beat.bookId));
+
+    // Everyone in this beat needs a reference sheet before they can be drawn
+    // consistently. Generated once per character, then reused for the book.
+    const appearing = cast.filter((ch) => beat.characterIds.includes(ch.id));
+    const resolved = await Promise.all(
+      appearing.map(async (ch) => {
+        if (ch.referenceKey) return ch;
+        try {
+          const referenceKey = await renderReferenceSheet(env, ch);
+          await db.update(characters).set({ referenceKey }).where(eq(characters.id, ch.id));
+          return { ...ch, referenceKey };
+        } catch {
+          // A missing sheet costs consistency, not the illustration itself.
+          return ch;
         }
+      }),
+    );
 
-        const cast = await db.select().from(characters).where(eq(characters.bookId, bookId));
+    const { key, width, height } = await renderBeat(env, beat, resolved);
 
-        // Make sure everyone in this beat has a reference sheet before drawing
-        // them. Generated once per character, then reused for the whole book.
-        const appearing = cast.filter((ch) => beat.characterIds.includes(ch.id));
-        const resolved = await Promise.all(
-          appearing.map(async (ch) => {
-            if (ch.referenceKey) return ch;
-            try {
-              const referenceKey = await renderReferenceSheet(env, ch);
-              await db
-                .update(characters)
-                .set({ referenceKey })
-                .where(eq(characters.id, ch.id));
-              return { ...ch, referenceKey };
-            } catch {
-              // A missing sheet costs consistency, not the illustration itself.
-              return ch;
-            }
-          }),
-        );
+    await db
+      .update(illustrations)
+      .set({ status: 'ready', key, width, height })
+      .where(and(eq(illustrations.beatId, beat.id), eq(illustrations.styleId, STYLE.id)));
+  } catch (error) {
+    // The reader degrades gracefully — they simply get no art for this beat —
+    // so record the failure and let the client stop waiting on it.
+    await markFailed(error instanceof Error ? error.message : String(error)).catch(() => {});
+  }
+}
 
-        const { key, width, height } = await renderBeat(env, { ...beat, bookId }, resolved);
-
-        await db
-          .update(illustrations)
-          .set({ status: 'ready', key, width, height })
-          .where(and(eq(illustrations.beatId, beatId), eq(illustrations.styleId, styleId)));
-
-        message.ack();
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        if (message.attempts >= 2) {
-          await db
-            .update(illustrations)
-            .set({ status: 'failed', error: reason })
-            .where(and(eq(illustrations.beatId, beatId), eq(illustrations.styleId, styleId)));
-          message.ack();
-        } else {
-          message.retry();
-        }
-      }
-    }
-  },
-};
+export default app;

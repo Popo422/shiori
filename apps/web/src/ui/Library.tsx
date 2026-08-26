@@ -1,28 +1,52 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { StoredBook } from '../lib/db';
 
 interface Props {
   books: StoredBook[];
   busy: boolean;
+  notice: string | null;
   onOpen(id: string): void;
   onAdd(files: FileList): void;
   onRemove(id: string): void;
+  onDismissNotice(): void;
 }
 
 /** The landing screen: a shelf, and one obvious way to add to it. */
-export function Library({ books, busy, onOpen, onAdd, onRemove }: Props) {
+export function Library({
+  books,
+  busy,
+  notice,
+  onOpen,
+  onAdd,
+  onRemove,
+  onDismissNotice,
+}: Props) {
   const input = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      setDragging(false);
       if (e.dataTransfer.files.length > 0) onAdd(e.dataTransfer.files);
     },
     [onAdd],
   );
 
   return (
-    <main className="library" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+    <main
+      className={`library ${dragging ? 'is-dragging' : ''}`}
+      onDrop={onDrop}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the page, not on every
+        // child element it passes over.
+        if (e.currentTarget === e.target) setDragging(false);
+      }}
+    >
       <header className="library__header">
         <h1 className="library__title">Shiori</h1>
         <p className="library__tagline">Your books, illustrated as you read.</p>
@@ -70,7 +94,21 @@ export function Library({ books, busy, onOpen, onAdd, onRemove }: Props) {
         </>
       )}
 
-      {busy && <p className="library__busy">Opening…</p>}
+      {busy && (
+        <p className="library__busy" role="status">
+          <span className="spinner" aria-hidden="true" />
+          Adding your book…
+        </p>
+      )}
+
+      {notice && (
+        <div className="notice" role="alert">
+          <span>{notice}</span>
+          <button className="notice__close" onClick={onDismissNotice} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
 
       <input
         ref={input}

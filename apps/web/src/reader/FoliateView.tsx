@@ -88,7 +88,17 @@ export function FoliateView({
         },
       );
 
-      await view.init({ lastLocation: initialLocation ?? undefined, showTextStart: !initialLocation });
+      if (initialLocation) {
+        await view.init({ lastLocation: initialLocation });
+      } else {
+        await view.init({ showTextStart: true });
+        // Many EPUBs ship no bodymatter landmark — this one points "start" at a
+        // map — so foliate lands on front matter and the reader has to tap past
+        // the cover, title, copyright and contents to reach the story. Fall back
+        // to the first chapter-like entry in the table of contents.
+        const start = storyStart(view.book);
+        if (start !== null) await view.goTo(start);
+      }
     })();
 
     return () => {
@@ -120,13 +130,37 @@ function renderedDocuments(view: any): Document[] {
 function applyTheme(doc: Document, theme: Props['theme'], fontScale: number) {
   const { bg, fg } = THEMES[theme];
   const id = 'shiori-theme';
+
+  // Publisher stylesheets routinely paint a background on a wrapper div, which
+  // beats html/body and leaves a white page in dark mode. Clear the background
+  // on every element, then paint it once on the root.
   const css = `
-    html, body { background: ${bg} !important; color: ${fg} !important; }
-    body { font-size: ${fontScale}em !important; line-height: 1.65 !important; }
+    html, body {
+      background: ${bg} !important;
+      color: ${fg} !important;
+    }
+    body * {
+      background-color: transparent !important;
+      color: ${fg} !important;
+      border-color: color-mix(in srgb, ${fg} 25%, transparent) !important;
+    }
+    body {
+      font-size: ${fontScale}em !important;
+      line-height: 1.65 !important;
+      max-width: 42em;
+      margin-inline: auto !important;
+      padding-inline: 1.1em !important;
+    }
     p { text-align: justify; hyphens: auto; }
-    a { color: inherit; }
-    img { max-width: 100%; height: auto; }
+    a { color: inherit !important; text-decoration-color: ${fg}66; }
+    img, svg, image {
+      max-width: 100% !important;
+      height: auto !important;
+    }
+    /* Cover and other full-page art must not be inverted or tinted. */
+    img { background: transparent !important; }
   `;
+
   let style = doc.getElementById(id) as HTMLStyleElement | null;
   if (!style) {
     style = doc.createElement('style');
@@ -143,4 +177,29 @@ function formatAuthor(author: unknown): string | null {
     return author.map((a) => (typeof a === 'string' ? a : a?.name)).filter(Boolean).join(', ') || null;
   }
   return (author as { name?: string }).name ?? null;
+}
+
+/**
+ * Where the story actually begins.
+ *
+ * Prefers an explicit bodymatter landmark; otherwise walks the table of contents
+ * for the first entry that isn't front matter. Returns an href for foliate to
+ * navigate to, or null when nothing better than the default is available.
+ */
+function storyStart(book: any): string | null {
+  const bodymatter = book?.landmarks?.find((m: any) =>
+    (m?.type ?? []).some((t: string) => t === 'bodymatter'),
+  );
+  if (bodymatter?.href) return bodymatter.href;
+
+  const FRONT_MATTER =
+    /^(cover|title|copyright|contents|table of contents|dedication|epigraph|map|acknowledg|about the author|also by|praise|imprint|colophon|half title|frontispiece)/i;
+
+  const entries: any[] = book?.toc ?? [];
+  const first = entries.find((t) => {
+    const label = (t?.label ?? '').trim();
+    return label.length > 0 && !FRONT_MATTER.test(label);
+  });
+
+  return first?.href ?? null;
 }
