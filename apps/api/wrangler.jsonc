@@ -1,10 +1,19 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "shiori-api",
+  "name": "shiori",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+
+  // The built reader is served from this same Worker, so the app and its API
+  // share one origin and /api needs no CORS or proxy in production.
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
 
   // Workers AI — image + text generation. No API key needed, it's a binding.
   "ai": { "binding": "AI" },
@@ -19,7 +28,7 @@
     {
       "binding": "DB",
       "database_name": "shiori",
-      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      "database_id": "c29a8781-1bb2-421f-99d1-ed8b46b538ef",
       "migrations_dir": "migrations"
     }
   ],
