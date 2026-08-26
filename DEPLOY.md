@@ -15,31 +15,8 @@ what's left.
 | GitHub secret | `CLOUDFLARE_ACCOUNT_ID` |
 | CI | passing on every push and PR |
 
-## Step 1 — Enable R2
+## Deploy
 
-This is the one blocker. R2 needs to be switched on once from the dashboard
-because it requires accepting the R2 terms, which can't be done from the CLI.
-
-1. Go to <https://dash.cloudflare.com/71d690817f1fa3abd0fb65adc837f1eb/r2>
-2. Click **Enable R2** and accept the terms (the free tier covers this app: 10 GB
-   storage and **zero egress**)
-3. Then create the bucket:
-
-```bash
-npx wrangler r2 bucket create shiori-art
-```
-
-## Step 2 — Workers Paid plan
-
-Cloudflare Queues requires the Workers Paid plan ($5/month). Everything else
-here fits inside free tiers.
-
-If you'd rather not pay, say so and the queue can be replaced with
-`ctx.waitUntil()` — generation would then run inside the request that triggered
-it. It works, but a slow render can hit the 300s wall-clock limit and there are
-no automatic retries, which is why the queue is the better default.
-
-## Step 3 — Deploy
 
 ```bash
 npm run build

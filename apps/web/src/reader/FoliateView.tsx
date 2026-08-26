@@ -23,7 +23,10 @@ interface Props {
   fontScale: number;
   onRelocate(pos: ReadingPosition, cfi: string | null): void;
   onSectionLoad(spineIndex: number, paragraphs: string[], doc: Document): void;
-  onReady(handle: FoliateHandle, meta: { title: string; author: string | null; spineCount: number }): void;
+  onReady(
+    handle: FoliateHandle,
+    meta: { title: string; author: string | null; spineCount: number; cover: Blob | null },
+  ): void;
 }
 
 const THEMES = {
@@ -75,6 +78,9 @@ export function FoliateView({
       if (disposed) return;
 
       const book = view.book;
+      // The real title, author and cover live in the book's own metadata — much
+      // better than the filename guess made when the file was added.
+      const cover = await book?.getCover?.().catch(() => null);
       onReady(
         {
           next: () => view.next(),
@@ -85,6 +91,7 @@ export function FoliateView({
           title: book?.metadata?.title ?? 'Untitled',
           author: formatAuthor(book?.metadata?.author),
           spineCount: book?.sections?.length ?? 0,
+          cover: cover instanceof Blob ? cover : null,
         },
       );
 

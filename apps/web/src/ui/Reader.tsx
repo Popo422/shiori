@@ -5,7 +5,7 @@ import { useIllustrator } from '../reader/useIllustrator';
 import { Illustration } from './Illustration';
 import { analyzeSection, getBeats, registerBook, artUrl } from '../lib/api';
 import { estimateBeatsPerScreen } from '../lib/position';
-import { rememberLocation, type StoredBook } from '../lib/db';
+import { rememberLocation, updateMetadata, type StoredBook } from '../lib/db';
 import { TARGET_SPACING } from '../lib/constants';
 
 interface Props {
@@ -33,12 +33,22 @@ export function Reader({ book, onClose }: Props) {
   useEffect(() => localStorage.setItem('shiori:font', String(fontScale)), [fontScale]);
 
   const onReady = useCallback(
-    (h: FoliateHandle, meta: { title: string; author: string | null; spineCount: number }) => {
+    (
+      h: FoliateHandle,
+      meta: { title: string; author: string | null; spineCount: number; cover: Blob | null },
+    ) => {
       handle.current = h;
+      const title = meta.title || book.title;
+      const author = meta.author ?? book.author;
+
+      // Replace the filename guess with the book's own metadata, so the shelf
+      // shows a real title and cover instead of "red rising" and initials.
+      updateMetadata(book.id, { title, author, cover: meta.cover }).catch(() => {});
+
       registerBook({
         bookId: book.id,
-        title: meta.title || book.title,
-        author: meta.author ?? book.author,
+        title,
+        author,
         format: book.format,
         spineCount: meta.spineCount,
       }).catch(() => {});

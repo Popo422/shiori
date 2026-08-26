@@ -6,6 +6,8 @@ character is introduced or a fight kicks off.
 
 Drop a book on your phone. That's the whole interaction.
 
+**Live:** https://shiori.zerniereyes.workers.dev
+
 ---
 
 ## How it works
@@ -62,7 +64,7 @@ any book pays almost nothing.
 | API | Hono on Cloudflare Workers |
 | Data | D1 + Drizzle ORM |
 | Images | Workers AI (FLUX.2 klein 4B) → R2 |
-| Queue | Cloudflare Queues (generation runs off the request path) |
+| Background work | ctx.waitUntil (generation runs off the request path) |
 
 ```
 packages/core   domain logic — beats, buffer policy, prompts, cache keys
@@ -91,7 +93,6 @@ npx wrangler login
 
 npx wrangler d1 create shiori
 npx wrangler r2 bucket create shiori-art
-npx wrangler queues create shiori-render
 ```
 
 ### 2. Add your database id
@@ -121,9 +122,10 @@ npm run dev                  # web on :5173, api on :8787
 npm run deploy
 ```
 
-The web app deploys to Cloudflare Pages and the API to Workers. On your phone, open
-the deployed URL and use **Add to Home Screen** — it installs as a PWA, works
-offline, and remembers your position.
+One deploy publishes both: the built reader is served as static assets from the
+same Worker as the API, so they share an origin. On your phone, open the deployed
+URL and use **Add to Home Screen** — it installs as a PWA, works offline, and
+remembers your position.
 
 ## Notes
 

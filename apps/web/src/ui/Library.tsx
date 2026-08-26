@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StoredBook } from '../lib/db';
 
 interface Props {
@@ -68,11 +68,7 @@ export function Library({
             {books.map((book) => (
               <li key={book.id} className="shelf__item">
                 <button className="cover" onClick={() => onOpen(book.id)}>
-                  {book.cover ? (
-                    <img src={URL.createObjectURL(book.cover)} alt="" className="cover__image" />
-                  ) : (
-                    <span className="cover__fallback">{initials(book.title)}</span>
-                  )}
+                  <Cover book={book} />
                 </button>
                 <div className="shelf__meta">
                   <p className="shelf__book">{book.title}</p>
@@ -129,4 +125,30 @@ function initials(title: string): string {
     .map((w) => w[0] ?? '')
     .join('')
     .toUpperCase();
+}
+
+/**
+ * Cover art, or the book's initials when it has none.
+ *
+ * The object URL is created once per cover and revoked on unmount — calling
+ * createObjectURL inline during render leaks a blob URL on every re-render.
+ */
+function Cover({ book }: { book: StoredBook }) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!book.cover) {
+      setUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(book.cover);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [book.cover]);
+
+  return url ? (
+    <img src={url} alt="" className="cover__image" />
+  ) : (
+    <span className="cover__fallback">{initials(book.title)}</span>
+  );
 }

@@ -54,3 +54,16 @@ export async function rememberLocation(id: string, cfi: string): Promise<void> {
 export async function removeBook(id: string): Promise<void> {
   await db.books.delete(id);
 }
+
+/**
+ * Overwrite the filename-derived title with the book's own metadata, once the
+ * reader has parsed it. Only fills the cover when one was actually found.
+ */
+export async function updateMetadata(
+  id: string,
+  meta: { title: string; author: string | null; cover: Blob | null },
+): Promise<void> {
+  const patch: Partial<StoredBook> = { title: meta.title, author: meta.author };
+  if (meta.cover) patch.cover = meta.cover;
+  await db.books.update(id, patch);
+}
