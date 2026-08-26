@@ -138,17 +138,23 @@ app.post('/api/art', async (c) => {
       });
     }
 
-    await c.env.RENDER_QUEUE.sendBatch(
-      targets.map((b) => ({ body: { bookId, beatId: b.id, styleId: STYLE.id } })),
-    );
+    // Queues rejects an empty batch, and beatIds may reference beats we have not
+    // analyzed yet, so only enqueue what actually resolved.
+    if (targets.length > 0) {
+      await c.env.RENDER_QUEUE.sendBatch(
+        targets.map((b) => ({ body: { bookId, beatId: b.id, styleId: STYLE.id } })),
+      );
+    }
   }
 
   return c.json({
     art: beatIds.map((id) => {
       const row = known.get(id);
+      // A beat we have no record of is not pending — it will never arrive, and
+      // reporting it as pending would make the client poll forever.
       return {
         beatId: id,
-        status: row?.status ?? 'pending',
+        status: row?.status ?? 'failed',
         url: row?.status === 'ready' ? `/api/art/${bookId}/${id}` : null,
         width: row?.width ?? 0,
         height: row?.height ?? 0,
@@ -175,7 +181,7 @@ app.get('/api/art/:bookId/:beatId', async (c) => {
 app.get('/api/health', (c) => c.json({ ok: true }));
 
 export default {
-  fetch: app.fetch,
+  fetch: (req: Request, env: Env, ctx: ExecutionContext) => app.fetch(req, env, ctx),
 
   /** Renders queued beats off the request path. */
   async queue(batch: MessageBatch<RenderJob>, env: Env): Promise<void> {

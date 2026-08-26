@@ -13,7 +13,8 @@
     "deploy": "turbo run deploy",
     "db:generate": "npm run generate -w @shiori/db",
     "db:migrate": "wrangler d1 migrations apply shiori --remote --cwd apps/api",
-    "db:migrate:local": "wrangler d1 migrations apply shiori --local --cwd apps/api"
+    "db:migrate:local": "wrangler d1 migrations apply shiori --local --cwd apps/api",
+    "test": "turbo run test"
   },
   "devDependencies": {
     "turbo": "^2.10.12",
