@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shiori-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Workers AI — image + text generation. No API key needed, it's a binding.
+  "ai": { "binding": "AI" },
+
+  // Generated illustrations. Zero egress, so serving art to phones is free.
+  "r2_buckets": [
+    { "binding": "ART", "bucket_name": "shiori-art" }
+  ],
+
+  // Beats, characters, illustration status.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shiori",
+      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Generation runs here so requests return immediately.
+  "queues": {
+    "producers": [{ "binding": "RENDER_QUEUE", "queue": "shiori-render" }],
+    "consumers": [{ "queue": "shiori-render", "max_batch_size": 5, "max_retries": 2 }]
+  }
+}

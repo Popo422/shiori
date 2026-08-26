@@ -1,0 +1,98 @@
+import { STYLE, buildPrompt, dimensionsFor, illustrationKey, type Beat, type CharacterSheet } from '@shiori/core';
+import type { Env } from './env';
+
+/**
+ * FLUX.2 klein 4B — chosen over flux-1-schnell for two reasons that matter here:
+ *   1. It accepts width/height, so we can render portraits for character beats
+ *      and landscapes for action spreads. schnell is locked to a square.
+ *   2. It accepts up to 4 reference images, which is how a character stays
+ *      on-model across an entire book.
+ * Cost is ~$0.0017 per 832x1216 image (~580 per dollar).
+ */
+const MODEL = '@cf/black-forest-labs/flux-2-klein-4b' as const;
+
+/** Reference images must be under 512x512 per the model's input contract. */
+const MAX_REFERENCE_EDGE = 512;
+
+export async function renderBeat(
+  env: Env,
+  beat: Beat,
+  cast: readonly CharacterSheet[],
+): Promise<{ key: string; width: number; height: number }> {
+  const { width, height } = dimensionsFor(beat.kind);
+  const prompt = buildPrompt(beat, cast);
+  const references = await loadReferences(env, beat, cast);
+
+  const inputs: Record<string, unknown> = {
+    prompt: `${prompt}. Avoid: ${STYLE.negative}`,
+    width,
+    height,
+    seed: stableSeed(beat.id),
+  };
+  // Positional reference slots: input_image_0..3.
+  references.forEach((data, i) => {
+    inputs[`input_image_${i}`] = data;
+  });
+
+  const result = (await env.AI.run(MODEL as never, inputs as never)) as { image?: string };
+  if (!result?.image) throw new Error('model returned no image');
+
+  const bytes = base64ToBytes(result.image);
+  const key = illustrationKey(beat.bookId, beat.id, STYLE.id);
+  await env.ART.put(key, bytes, {
+    httpMetadata: {
+      contentType: 'image/jpeg',
+      // Art is immutable once generated — let the CDN and phone cache it hard.
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+  });
+
+  return { key, width, height };
+}
+
+async function loadReferences(
+  env: Env,
+  beat: Beat,
+  cast: readonly CharacterSheet[],
+): Promise<string[]> {
+  const keys = cast
+    .filter((c) => beat.characterIds.includes(c.id) && c.referenceKey)
+    .slice(0, 4)
+    .map((c) => c.referenceKey as string);
+
+  const loaded = await Promise.all(
+    keys.map(async (key) => {
+      const obj = await env.ART.get(key);
+      if (!obj) return null;
+      return bytesToBase64(new Uint8Array(await obj.arrayBuffer()));
+    }),
+  );
+  return loaded.filter((x): x is string => x !== null);
+}
+
+/**
+ * Deterministic seed per beat: regenerating the same beat yields the same image,
+ * which keeps the shared cache coherent if a render is ever retried.
+ */
+function stableSeed(beatId: string): number {
+  let hash = 0;
+  for (let i = 0; i < beatId.length; i++) {
+    hash = (Math.imul(31, hash) + beatId.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] as number);
+  return btoa(bin);
+}
+
+export { MAX_REFERENCE_EDGE };

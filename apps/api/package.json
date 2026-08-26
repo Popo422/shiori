@@ -1,0 +1,22 @@
+{
+  "name": "@shiori/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@shiori/core": "*",
+    "@shiori/db": "*",
+    "hono": "^4.13.5",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260826.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.126.0"
+  }
+}
