@@ -1,4 +1,4 @@
-import type { Beat, BeatKind } from '@shiori/core';
+import type { Beat, BeatKind, CharacterSheet } from '@shiori/core';
 import type { Env } from './env';
 
 /**
@@ -8,12 +8,20 @@ import type { Env } from './env';
  */
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
 
+/**
+ * Paragraphs per analysis request. At ~400 chars each this lands near 15k
+ * tokens, comfortably inside the model context with room for the response.
+ */
+const PARAGRAPHS_PER_WINDOW = 120;
+
 /** Roughly one illustration per this many paragraphs. Tunes density. */
 const TARGET_SPACING = 14;
 
 const SYSTEM = `You identify moments in a novel that deserve an illustration, in the style of a Japanese light novel.
 
-Return STRICT JSON: {"beats":[{"paraIndex":N,"kind":"character|scene|action|item","prompt":"...","characters":["Name"],"salience":0.0-1.0}]}
+Return STRICT JSON:
+{"beats":[{"paraIndex":N,"kind":"character|scene|action|item","prompt":"...","characters":["Name"],"salience":0.0-1.0}],
+ "cast":[{"name":"Name","descriptor":"physical appearance only"}]}
 
 Rules:
 - "character": a person is introduced or described for the first time.
@@ -23,35 +31,81 @@ Rules:
 - prompt: ONE vivid visual sentence. Describe only what is SEEN — no names, no plot, no dialogue.
 - Never place a beat on a paragraph that reveals a later twist.
 - paraIndex must be the index of a paragraph given to you.
-- Prefer the START of a moment, so the art appears as it begins.`;
+- Prefer the START of a moment, so the art appears as it begins.
+- cast: for every named person appearing here, give a purely PHYSICAL descriptor
+  (hair, eyes, build, clothing). No personality, no plot. This is what keeps a
+  character looking like themselves across the whole book.`;
 
 export async function analyzeSection(
   env: Env,
   bookId: string,
   spineIndex: number,
   paragraphs: readonly string[],
-): Promise<Beat[]> {
+): Promise<{ beats: Beat[]; cast: CastEntry[] }> {
   const meaningful = paragraphs
     .map((text, index) => ({ index, text }))
     .filter((p) => p.text.length > 40);
-  if (meaningful.length === 0) return [];
+  if (meaningful.length === 0) return { beats: [], cast: [] };
 
-  const budget = Math.max(1, Math.round(meaningful.length / TARGET_SPACING));
-  const numbered = meaningful.map((p) => `[${p.index}] ${truncate(p.text, 400)}`).join('\n\n');
+  // A single chapter can easily exceed the model's context window, and many
+  // EPUBs ship one long section per chapter. Split into windows that fit, or
+  // analysis would silently fail on exactly the long chapters worth illustrating.
+  const windows = chunk(meaningful, PARAGRAPHS_PER_WINDOW);
 
-  const response = (await env.AI.run(MODEL as never, {
-    messages: [
-      { role: 'system', content: SYSTEM },
-      {
-        role: 'user',
-        content: `Choose at most ${budget} beats from this section.\n\n${numbered}`,
-      },
-    ],
-    max_tokens: 2048,
-    temperature: 0.4,
-  } as never)) as { response?: string };
+  const results = await Promise.all(
+    windows.map((window) => analyzeWindow(env, bookId, spineIndex, window, paragraphs.length)),
+  );
 
-  return parseBeats(response?.response ?? '', bookId, spineIndex, paragraphs.length);
+  const beats = results.flatMap((r) => r.beats).sort((a, b) => a.paraIndex - b.paraIndex);
+  const cast = dedupeById(results.flatMap((r) => r.cast));
+  return { beats, cast };
+}
+
+async function analyzeWindow(
+  env: Env,
+  bookId: string,
+  spineIndex: number,
+  window: readonly { index: number; text: string }[],
+  paragraphCount: number,
+): Promise<{ beats: Beat[]; cast: CastEntry[] }> {
+  const budget = Math.max(1, Math.round(window.length / TARGET_SPACING));
+  const numbered = window.map((p) => `[${p.index}] ${truncate(p.text, 400)}`).join('\n\n');
+
+  try {
+    const response = (await env.AI.run(MODEL as never, {
+      messages: [
+        { role: 'system', content: SYSTEM },
+        {
+          role: 'user',
+          content: `Choose at most ${budget} beats from this passage.\n\n${numbered}`,
+        },
+      ],
+      max_tokens: 2048,
+      temperature: 0.4,
+    } as never)) as { response?: string };
+
+    const raw = response?.response ?? '';
+    return {
+      beats: parseBeats(raw, bookId, spineIndex, paragraphCount),
+      cast: parseCast(raw),
+    };
+  } catch {
+    // One failed window shouldn't cost the whole chapter its illustrations.
+    return { beats: [], cast: [] };
+  }
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+function dedupeById(entries: readonly CastEntry[]): CastEntry[] {
+  const byId = new Map<string, CastEntry>();
+  // First description wins: a character's look is fixed by their introduction.
+  for (const entry of entries) if (!byId.has(entry.id)) byId.set(entry.id, entry);
+  return [...byId.values()];
 }
 
 /** The model is not guaranteed to return clean JSON; recover what we can. */
@@ -110,7 +164,7 @@ function toBeat(
     paraIndex,
     kind,
     prompt,
-    characterIds: characters.map(slugify),
+    characterIds: characters.map((n) => `${bookId}:${slugify(n)}`),
     salience: clamp01(Number(o?.salience ?? 0.5)),
   };
 }
@@ -139,3 +193,46 @@ function slugify(name: string): string {
 }
 
 export { TARGET_SPACING };
+
+/** A character's physical description, harvested during section analysis. */
+export interface CastEntry {
+  id: string;
+  name: string;
+  descriptor: string;
+}
+
+/**
+ * Pull character descriptors out of the same response that produced the beats.
+ * These become reference sheets, which is what keeps a character on-model for
+ * the rest of the book.
+ */
+function parseCast(raw: string): CastEntry[] {
+  const json = extractJson(raw);
+  if (!json) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+
+  const list = (parsed as { cast?: unknown[] })?.cast;
+  if (!Array.isArray(list)) return [];
+
+  const seen = new Set<string>();
+  return list
+    .map((item) => {
+      const o = item as Record<string, unknown>;
+      const name = typeof o?.name === 'string' ? o.name.trim() : '';
+      const descriptor = typeof o?.descriptor === 'string' ? o.descriptor.trim() : '';
+      if (name.length === 0 || descriptor.length < 8) return null;
+      return { id: slugify(name), name, descriptor };
+    })
+    .filter((c): c is CastEntry => c !== null)
+    .filter((c) => {
+      if (seen.has(c.id)) return false;
+      seen.add(c.id);
+      return true;
+    });
+}

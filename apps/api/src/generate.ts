@@ -1,4 +1,12 @@
-import { STYLE, buildPrompt, dimensionsFor, illustrationKey, type Beat, type CharacterSheet } from '@shiori/core';
+import {
+  STYLE,
+  buildPrompt,
+  dimensionsFor,
+  illustrationKey,
+  referenceSheetKey,
+  type Beat,
+  type CharacterSheet,
+} from '@shiori/core';
 import type { Env } from './env';
 
 /**
@@ -96,3 +104,39 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export { MAX_REFERENCE_EDGE };
+
+/**
+ * Render a character's reference sheet: a plain, well-lit portrait on a neutral
+ * ground, generated once from their introduction descriptor.
+ *
+ * Every later illustration featuring them passes this back as an input image, so
+ * the same person stays recognizably the same person across the whole book —
+ * which is the entire reason for choosing klein over the cheaper schnell.
+ *
+ * Kept small deliberately: the model requires reference images under 512x512.
+ */
+export async function renderReferenceSheet(
+  env: Env,
+  character: CharacterSheet,
+): Promise<string> {
+  const result = (await env.AI.run(MODEL as never, {
+    prompt:
+      `${STYLE.positive}. Character reference sheet, single figure, front facing, ` +
+      `neutral grey background, even lighting, full body, neutral expression. ` +
+      `${character.descriptor}. Avoid: ${STYLE.negative}, multiple views, text labels`,
+    width: MAX_REFERENCE_EDGE,
+    height: MAX_REFERENCE_EDGE,
+    seed: stableSeed(character.id),
+  } as never)) as { image?: string };
+
+  if (!result?.image) throw new Error('model returned no reference image');
+
+  const key = referenceSheetKey(character.bookId, character.id);
+  await env.ART.put(key, base64ToBytes(result.image), {
+    httpMetadata: {
+      contentType: 'image/jpeg',
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+  });
+  return key;
+}

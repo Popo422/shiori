@@ -5,7 +5,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import { books, beats, characters, illustrations } from '@shiori/db';
 import { STYLE, dimensionsFor, illustrationKey } from '@shiori/core';
 import { analyzeSection } from './analyze';
-import { renderBeat } from './generate';
+import { renderBeat, renderReferenceSheet } from './generate';
 import type { Env, RenderJob } from './env';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -54,7 +54,8 @@ app.post('/api/analyze', async (c) => {
     .where(and(eq(beats.bookId, bookId), eq(beats.spineIndex, spineIndex)));
   if (cached.length > 0) return c.json({ beats: cached });
 
-  const found = await analyzeSection(c.env, bookId, spineIndex, paragraphs);
+  const { beats: found, cast } = await analyzeSection(c.env, bookId, spineIndex, paragraphs);
+
   if (found.length > 0) {
     await db
       .insert(beats)
@@ -72,6 +73,25 @@ app.post('/api/analyze', async (c) => {
       )
       .onConflictDoNothing();
   }
+
+  // Record the cast the first time each character is described. Later sections
+  // that mention them again keep the original descriptor, so a character's
+  // appearance is fixed by their introduction rather than drifting per chapter.
+  if (cast.length > 0) {
+    await db
+      .insert(characters)
+      .values(
+        cast.map((entry) => ({
+          id: `${bookId}:${entry.id}`,
+          bookId,
+          name: entry.name,
+          descriptor: entry.descriptor,
+          referenceKey: null,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+
   return c.json({ beats: found });
 });
 
@@ -197,7 +217,28 @@ export default {
         }
 
         const cast = await db.select().from(characters).where(eq(characters.bookId, bookId));
-        const { key, width, height } = await renderBeat(env, { ...beat, bookId }, cast);
+
+        // Make sure everyone in this beat has a reference sheet before drawing
+        // them. Generated once per character, then reused for the whole book.
+        const appearing = cast.filter((ch) => beat.characterIds.includes(ch.id));
+        const resolved = await Promise.all(
+          appearing.map(async (ch) => {
+            if (ch.referenceKey) return ch;
+            try {
+              const referenceKey = await renderReferenceSheet(env, ch);
+              await db
+                .update(characters)
+                .set({ referenceKey })
+                .where(eq(characters.id, ch.id));
+              return { ...ch, referenceKey };
+            } catch {
+              // A missing sheet costs consistency, not the illustration itself.
+              return ch;
+            }
+          }),
+        );
+
+        const { key, width, height } = await renderBeat(env, { ...beat, bookId }, resolved);
 
         await db
           .update(illustrations)

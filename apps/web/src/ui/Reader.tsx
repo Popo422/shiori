@@ -149,11 +149,7 @@ export function Reader({ book, onClose }: Props) {
               </button>
             </div>
           </div>
-          <p className="chrome__status">
-            {beats.length > 0
-              ? `${illustrator.ready.size} of ${beats.length} illustrated · ${illustrator.depth} ahead`
-              : 'Reading ahead…'}
-          </p>
+          <p className="chrome__status">{status(beats.length, illustrator)}</p>
         </div>
       </div>
     </div>
@@ -170,4 +166,18 @@ function mergeBeats(prev: Beat[], next: Beat[]): Beat[] {
 
 function stored<T extends string>(key: string, fallback: T): T {
   return (localStorage.getItem(key) as T | null) ?? fallback;
+}
+
+/** Plain-language state, so a stalled render never looks like a broken app. */
+function status(
+  beatCount: number,
+  illustrator: { ready: ReadonlyMap<string, unknown>; pending: number; depth: number },
+): string {
+  if (beatCount === 0) return 'Looking ahead for scenes to illustrate…';
+
+  const done = illustrator.ready.size - illustrator.pending;
+  if (illustrator.pending > 0) {
+    return `Drawing ${illustrator.pending} ${illustrator.pending === 1 ? 'scene' : 'scenes'}…`;
+  }
+  return `${done} of ${beatCount} illustrated · reading ${illustrator.depth} ahead`;
 }

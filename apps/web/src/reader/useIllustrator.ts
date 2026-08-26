@@ -23,10 +23,16 @@ interface Illustrator {
   /** Everything ready so far, addressable by beat id. */
   ready: ReadonlyMap<string, ArtState>;
   depth: number;
+  /** How many illustrations are still rendering, for status display. */
+  pending: number;
+  /** True when the beat under the reader failed to render. */
+  currentFailed: boolean;
   onRelocate: (pos: ReadingPosition) => void;
 }
 
 const POLL_MS = 2_500;
+/** A render that has not landed in two minutes is not going to. */
+const POLL_TIMEOUT_MS = 120_000;
 
 /**
  * Drives illustration generation from the reader's position.
@@ -90,7 +96,26 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     const pending = [...art.values()].filter((a) => a.status === 'pending').map((a) => a.beatId);
     if (pending.length === 0) return;
 
+    let elapsed = 0;
     const timer = setInterval(() => {
+      elapsed += POLL_MS;
+
+      // Give up rather than polling a stuck render forever — an endless 2.5s
+      // interval is a real battery cost on a phone left open on one page.
+      if (elapsed >= POLL_TIMEOUT_MS) {
+        clearInterval(timer);
+        setArt((prev) => {
+          const out = new Map(prev);
+          for (const id of pending) {
+            const row = out.get(id);
+            if (row?.status === 'pending') out.set(id, { ...row, status: 'failed' });
+            inflight.current.delete(id);
+          }
+          return out;
+        });
+        return;
+      }
+
       requestArt({ bookId, beatIds: pending })
         .then(({ art: states }) => {
           setArt((prev) => merge(prev, states));
@@ -104,20 +129,24 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     return () => clearInterval(timer);
   }, [bookId, art]);
 
-  const current = useMemo(() => {
+  /** The beat the reader is inside, whatever state its art is in. */
+  const currentBeat = useMemo(() => {
     if (!position) return null;
-    // The most recent beat at or before the reader's position.
     const passed = beats.filter((b) => compare(b, position) <= 0);
-    const beat = passed[passed.length - 1];
-    if (!beat) return null;
-    const state = art.get(beat.id);
-    return state?.status === 'ready' ? { ...state, beat } : null;
-  }, [position, beats, art]);
+    return passed[passed.length - 1] ?? null;
+  }, [position, beats]);
+
+  const currentState = currentBeat ? art.get(currentBeat.id) : undefined;
 
   return {
-    current,
+    current:
+      currentBeat && currentState?.status === 'ready'
+        ? { ...currentState, beat: currentBeat }
+        : null,
     ready: art,
     depth: lookaheadDepth(telemetry),
+    pending: [...art.values()].filter((a) => a.status === 'pending').length,
+    currentFailed: currentState?.status === 'failed',
     onRelocate,
   };
 }
