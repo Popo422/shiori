@@ -330,6 +330,12 @@ app.post('/api/art/regenerate', async (c) => {
 /** How long a claimed render may go silent before another request may retry it. */
 const STALE_RENDER_MS = 3 * 60 * 1000;
 
+/**
+ * Marks a reference sheet as unavailable, so a character whose sheet the model
+ * refuses does not block their illustrations on every subsequent attempt.
+ */
+const UNAVAILABLE_SHEET = 'unavailable';
+
 app.get('/api/health', (c) => c.json({ ok: true }));
 
 
@@ -358,32 +364,67 @@ async function renderAndStore(
   try {
     const cast = await loadCast(db, beat.bookId, beat.characterIds);
 
-    // Each character needs a reference sheet for the era this beat sits in.
-    // A character who is physically remade partway through the book gets one
-    // sheet per era, so art matches who they were at this point in the story.
-    const resolved = await Promise.all(
-      cast.map(async (character) => {
-        const era = appearanceAt(character, beat.spineIndex);
-        if (!era || era.referenceKey) return character;
+    // Render at most one reference sheet per request, then stop.
+    //
+    // waitUntil allows ~30s of background work. A sheet and an illustration are
+    // 12-20s each, so doing both in one request overran the budget and the
+    // isolate was killed mid-render — no error, no write-back, and a plate stuck
+    // as a skeleton forever. Only character beats have sheets, which is why
+    // scene beats always worked and this looked intermittent.
+    //
+    // The row stays pending, so the client's next poll picks up where this left
+    // off and the illustration itself renders on that request.
+    const eras = await db
+      .select()
+      .from(characterAppearances)
+      .where(eq(characterAppearances.bookId, beat.bookId));
 
+    // Check the stored value, not the loaded one: loadCast maps 'unavailable'
+    // to null so the prompt ignores it, which would otherwise make a refused
+    // sheet retry on every single request and never draw the beat at all.
+    const missingSheet = cast.find((character) => {
+      const era = appearanceAt(character, beat.spineIndex);
+      if (!era) return false;
+      const stored = eras.find(
+        (e) => e.characterId === character.id && e.fromSpineIndex === era.fromSpineIndex,
+      );
+      return stored?.referenceKey == null;
+    });
+
+    if (missingSheet) {
+      const era = appearanceAt(missingSheet, beat.spineIndex);
+      if (era) {
         try {
-          const referenceKey = await renderReferenceSheet(env, character, era);
+          const referenceKey = await renderReferenceSheet(env, missingSheet, era);
           await db
             .update(characterAppearances)
             .set({ referenceKey })
             .where(
               and(
-                eq(characterAppearances.characterId, character.id),
+                eq(characterAppearances.characterId, missingSheet.id),
                 eq(characterAppearances.fromSpineIndex, era.fromSpineIndex),
               ),
             );
-          return withReferenceKey(character, era.fromSpineIndex, referenceKey);
         } catch {
-          // A missing sheet costs consistency, not the illustration itself.
-          return character;
+          // A sheet that cannot be drawn costs consistency, not the
+          // illustration. Fall through and draw the beat without it rather than
+          // retrying forever.
+          await db
+            .update(characterAppearances)
+            .set({ referenceKey: UNAVAILABLE_SHEET })
+            .where(
+              and(
+                eq(characterAppearances.characterId, missingSheet.id),
+                eq(characterAppearances.fromSpineIndex, era.fromSpineIndex),
+              ),
+            );
         }
-      }),
-    );
+      }
+      // Leave the row pending; the next poll renders the illustration.
+      return;
+    }
+
+    const resolved = cast;
 
     // Text-only place descriptors, so a location reads the same way every time
     // it appears without paying for a reference image per setting.
@@ -442,7 +483,9 @@ async function loadCast(
       .map((e) => ({
         fromSpineIndex: e.fromSpineIndex,
         descriptor: e.descriptor,
-        referenceKey: e.referenceKey,
+        // A sheet marked unavailable is not a key: the descriptor still steers
+        // the prompt, there is simply no reference image to attach.
+        referenceKey: e.referenceKey === UNAVAILABLE_SHEET ? null : e.referenceKey,
       }))
       .sort((a, b) => a.fromSpineIndex - b.fromSpineIndex),
   }));
