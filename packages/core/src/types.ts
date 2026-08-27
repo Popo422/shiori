@@ -25,19 +25,39 @@ export interface Beat {
   prompt: string;
   /** Character ids present, used to attach reference sheets for consistency. */
   characterIds: string[];
+  /** Where this happens, if a known place. Keeps a location visually stable. */
+  settingId: string | null;
   /** 0..1 — how strongly this moment wants art. Used to trim under budget. */
   salience: number;
 }
 
-/** A recurring character, with a reference image that keeps them on-model. */
+/**
+ * A character, and how they looked across the book.
+ *
+ * appearances is ordered by fromSpineIndex. Most characters have exactly one
+ * entry; a character who is physically remade partway through has more, and the
+ * one in force at a given beat is resolved by position.
+ */
 export interface CharacterSheet {
   id: string;
   bookId: string;
   name: string;
-  /** Canonical appearance description, built once at first appearance. */
+  appearances: CharacterAppearance[];
+}
+
+/** How a character looks from a point in the book onward. */
+export interface CharacterAppearance {
+  fromSpineIndex: number;
   descriptor: string;
-  /** R2 key of the reference portrait, fed back as input_image_0 on later beats. */
   referenceKey: string | null;
+}
+
+/** A recurring place. Text only — no reference image. */
+export interface SettingSheet {
+  id: string;
+  bookId: string;
+  name: string;
+  descriptor: string;
 }
 
 export type IllustrationStatus = 'pending' | 'ready' | 'failed';

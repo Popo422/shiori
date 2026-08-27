@@ -18,6 +18,7 @@ const beat = (spineIndex: number, paraIndex: number): Beat => ({
   kind: 'scene',
   prompt: 'a quiet room',
   characterIds: [],
+  settingId: null,
   salience: 0.5,
 });
 

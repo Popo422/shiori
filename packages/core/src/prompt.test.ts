@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPrompt, referenceKeys, dimensionsFor, STYLE } from './prompt.js';
+import { buildPrompt, referenceKeys, dimensionsFor, appearanceAt, STYLE } from './prompt.js';
 import type { Beat, CharacterSheet } from './types.js';
 
 const beat = (over: Partial<Beat> = {}): Beat => ({
@@ -10,6 +10,7 @@ const beat = (over: Partial<Beat> = {}): Beat => ({
   kind: 'character',
   prompt: 'a girl in a red coat on a snowy platform',
   characterIds: [],
+  settingId: null,
   salience: 0.8,
   ...over,
 });
@@ -18,8 +19,13 @@ const sheet = (over: Partial<CharacterSheet> = {}): CharacterSheet => ({
   id: 'book:mei',
   bookId: 'book',
   name: 'Mei',
-  descriptor: 'short black hair, grey eyes, red wool coat',
-  referenceKey: 'ref/book/book:mei.jpg',
+  appearances: [
+    {
+      fromSpineIndex: 0,
+      descriptor: 'short black hair, grey eyes, red wool coat',
+      referenceKey: 'ref/book/book:mei.jpg',
+    },
+  ],
   ...over,
 });
 
@@ -50,7 +56,7 @@ describe('buildPrompt', () => {
   });
 
   it('includes descriptors only for characters actually in the beat', () => {
-    const cast = [sheet(), sheet({ id: 'book:ren', name: 'Ren', descriptor: 'tall, scarred' })];
+    const cast = [sheet(), sheet({ id: 'book:ren', name: 'Ren', appearances: [{ fromSpineIndex: 0, descriptor: 'tall, scarred', referenceKey: null }] })];
     const result = buildPrompt(beat({ characterIds: ['book:mei'] }), cast);
     expect(result).toContain('red wool coat');
     expect(result).not.toContain('scarred');
@@ -64,14 +70,73 @@ describe('buildPrompt', () => {
 describe('referenceKeys', () => {
   it('respects the four-image limit the model imposes', () => {
     const cast = Array.from({ length: 7 }, (_, i) =>
-      sheet({ id: `book:c${i}`, referenceKey: `ref/book/c${i}.jpg` }),
+      sheet({
+        id: `book:c${i}`,
+        appearances: [
+          { fromSpineIndex: 0, descriptor: 'a person', referenceKey: `ref/book/c${i}.jpg` },
+        ],
+      }),
     );
     const keys = referenceKeys(beat({ characterIds: cast.map((c) => c.id) }), cast);
     expect(keys.length).toBeLessThanOrEqual(4);
   });
 
   it('skips characters who have no sheet yet', () => {
-    const cast = [sheet({ referenceKey: null })];
+    const cast = [sheet({ appearances: [{ fromSpineIndex: 0, descriptor: 'a person', referenceKey: null }] })];
     expect(referenceKeys(beat({ characterIds: ['book:mei'] }), cast)).toEqual([]);
+  });
+});
+
+describe('appearanceAt', () => {
+  // Red Rising carves Darrow from a small Red into a tall Gold partway through.
+  const darrow: CharacterSheet = {
+    id: 'rr:darrow',
+    bookId: 'rr',
+    name: 'Darrow',
+    appearances: [
+      { fromSpineIndex: 0, descriptor: 'lean Red, rust-red hair, small', referenceKey: 'a.jpg' },
+      { fromSpineIndex: 14, descriptor: 'tall Gold, golden hair, sculpted', referenceKey: 'b.jpg' },
+    ],
+  };
+
+  it('draws him as a Red before the carving', () => {
+    expect(appearanceAt(darrow, 3)?.descriptor).toContain('rust-red');
+  });
+
+  it('draws him as a Gold after it', () => {
+    expect(appearanceAt(darrow, 20)?.descriptor).toContain('golden');
+  });
+
+  it('switches exactly at the boundary, not one section late', () => {
+    expect(appearanceAt(darrow, 13)?.descriptor).toContain('rust-red');
+    expect(appearanceAt(darrow, 14)?.descriptor).toContain('golden');
+  });
+
+  it('never reveals a later appearance to an earlier reader', () => {
+    // The whole point: a reader in chapter 3 must not see what he becomes.
+    for (let spine = 0; spine < 14; spine++) {
+      expect(appearanceAt(darrow, spine)?.descriptor).not.toContain('golden');
+    }
+  });
+
+  it('uses the matching era reference sheet, not a fixed one', () => {
+    expect(appearanceAt(darrow, 2)?.referenceKey).toBe('a.jpg');
+    expect(appearanceAt(darrow, 30)?.referenceKey).toBe('b.jpg');
+  });
+
+  it('handles the ordinary case of a character who never changes', () => {
+    const mei = sheet();
+    expect(appearanceAt(mei, 0)?.descriptor).toContain('red wool coat');
+    expect(appearanceAt(mei, 99)?.descriptor).toContain('red wool coat');
+  });
+
+  it('falls back to the earliest era rather than dropping the character', () => {
+    const late: CharacterSheet = {
+      id: 'x',
+      bookId: 'b',
+      name: 'X',
+      appearances: [{ fromSpineIndex: 5, descriptor: 'appears late', referenceKey: null }],
+    };
+    expect(appearanceAt(late, 0)?.descriptor).toBe('appears late');
   });
 });

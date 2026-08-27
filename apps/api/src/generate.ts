@@ -4,8 +4,11 @@ import {
   dimensionsFor,
   illustrationKey,
   referenceSheetKey,
+  referenceKeys,
   type Beat,
+  type CharacterAppearance,
   type CharacterSheet,
+  type SettingSheet,
 } from '@shiori/core';
 import type { Env } from './env';
 
@@ -26,9 +29,10 @@ export async function renderBeat(
   env: Env,
   beat: Beat,
   cast: readonly CharacterSheet[],
+  places: readonly SettingSheet[] = [],
 ): Promise<{ key: string; width: number; height: number }> {
   const { width, height } = dimensionsFor(beat.kind);
-  const prompt = buildPrompt(beat, cast);
+  const prompt = buildPrompt(beat, cast, places);
   const references = await loadReferences(env, beat, cast);
 
   const form = new FormData();
@@ -75,10 +79,7 @@ async function loadReferences(
   beat: Beat,
   cast: readonly CharacterSheet[],
 ): Promise<Blob[]> {
-  const keys = cast
-    .filter((c) => beat.characterIds.includes(c.id) && c.referenceKey)
-    .slice(0, 4)
-    .map((c) => c.referenceKey as string);
+  const keys = referenceKeys(beat, cast);
 
   const loaded = await Promise.all(
     keys.map(async (key) => {
@@ -124,17 +125,18 @@ export { MAX_REFERENCE_EDGE };
 export async function renderReferenceSheet(
   env: Env,
   character: CharacterSheet,
+  era: CharacterAppearance,
 ): Promise<string> {
   const form = new FormData();
   form.append(
     'prompt',
     `${STYLE.positive}. Character reference sheet, single figure, front facing, ` +
       `neutral grey background, even lighting, full body, neutral expression. ` +
-      `${character.descriptor}. Avoid: ${STYLE.negative}, multiple views, text labels`,
+      `${era.descriptor}. Avoid: ${STYLE.negative}, multiple views, text labels`,
   );
   form.append('width', String(MAX_REFERENCE_EDGE));
   form.append('height', String(MAX_REFERENCE_EDGE));
-  form.append('seed', String(stableSeed(character.id)));
+  form.append('seed', String(stableSeed(`${character.id}@${era.fromSpineIndex}`)));
 
   const result = (await env.AI.run(MODEL as never, {
     multipart: toMultipart(form),
@@ -142,7 +144,7 @@ export async function renderReferenceSheet(
 
   if (!result?.image) throw new Error('model returned no reference image');
 
-  const key = referenceSheetKey(character.bookId, character.id);
+  const key = referenceSheetKey(character.bookId, `${character.id}@${era.fromSpineIndex}`);
   await env.ART.put(key, base64ToBytes(result.image), {
     httpMetadata: {
       contentType: 'image/jpeg',

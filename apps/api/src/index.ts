@@ -2,8 +2,22 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { drizzle } from 'drizzle-orm/d1';
 import { eq, and, inArray } from 'drizzle-orm';
-import { books, beats, characters, illustrations } from '@shiori/db';
-import { STYLE, dimensionsFor, illustrationKey, type Beat } from '@shiori/core';
+import {
+  books,
+  beats,
+  characters,
+  characterAppearances,
+  settings,
+  illustrations,
+} from '@shiori/db';
+import {
+  STYLE,
+  dimensionsFor,
+  illustrationKey,
+  appearanceAt,
+  type Beat,
+  type CharacterSheet,
+} from '@shiori/core';
 import { analyzeSection } from './analyze';
 import { renderBeat, renderReferenceSheet } from './generate';
 import type { Env } from './env';
@@ -54,7 +68,11 @@ app.post('/api/analyze', async (c) => {
     .where(and(eq(beats.bookId, bookId), eq(beats.spineIndex, spineIndex)));
   if (cached.length > 0) return c.json({ beats: cached });
 
-  const { beats: found, cast } = await analyzeSection(c.env, bookId, spineIndex, paragraphs);
+  const {
+    beats: found,
+    cast,
+    places,
+  } = await analyzeSection(c.env, bookId, spineIndex, paragraphs);
 
   if (found.length > 0) {
     await db
@@ -68,15 +86,36 @@ app.post('/api/analyze', async (c) => {
           kind: b.kind,
           prompt: b.prompt,
           characterIds: b.characterIds,
+          settingId: b.settingId,
           salience: b.salience,
         })),
       )
       .onConflictDoNothing();
   }
 
-  // Record the cast the first time each character is described. Later sections
-  // that mention them again keep the original descriptor, so a character's
-  // appearance is fixed by their introduction rather than drifting per chapter.
+  // Recurring places, recorded the same way as the cast: first description
+  // wins, so a location is fixed by its first appearance.
+  if (places.length > 0) {
+    await db
+      .insert(settings)
+      .values(
+        places.map((entry) => ({
+          id: `${bookId}:${entry.id}`,
+          bookId,
+          name: entry.name,
+          descriptor: entry.descriptor,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+
+  // Record the cast, then their appearance from this section onward.
+  //
+  // A character's look is normally fixed by their introduction, which is what
+  // stops it drifting chapter to chapter. But a character who is physically
+  // remade partway through the book — Red Rising carves Darrow from a Red into
+  // a Gold — gets a second appearance anchored here, and beats from this point
+  // on resolve to it.
   if (cast.length > 0) {
     await db
       .insert(characters)
@@ -85,11 +124,39 @@ app.post('/api/analyze', async (c) => {
           id: `${bookId}:${entry.id}`,
           bookId,
           name: entry.name,
-          descriptor: entry.descriptor,
-          referenceKey: null,
         })),
       )
       .onConflictDoNothing();
+
+    const existingEras = await db
+      .select()
+      .from(characterAppearances)
+      .where(eq(characterAppearances.bookId, bookId));
+
+    const newEras = cast.filter((entry) => {
+      const mine = existingEras.filter((e) => e.characterId === `${bookId}:${entry.id}`);
+      if (mine.length === 0) return true;
+      // Only open a new era when the description has actually changed, so a
+      // rephrasing of the same look doesn't fragment the character.
+      const latest = mine.reduce((a, b) => (a.fromSpineIndex > b.fromSpineIndex ? a : b));
+      return latest.descriptor !== entry.descriptor && latest.fromSpineIndex < spineIndex;
+    });
+
+    if (newEras.length > 0) {
+      await db
+        .insert(characterAppearances)
+        .values(
+          newEras.map((entry) => ({
+            id: `${bookId}:${entry.id}@${spineIndex}`,
+            characterId: `${bookId}:${entry.id}`,
+            bookId,
+            fromSpineIndex: spineIndex,
+            descriptor: entry.descriptor,
+            referenceKey: null,
+          })),
+        )
+        .onConflictDoNothing();
+    }
   }
 
   return c.json({ beats: found });
@@ -200,21 +267,6 @@ app.get('/api/art/:bookId/:beatId', async (c) => {
 
 app.get('/api/health', (c) => c.json({ ok: true }));
 
-// TEMPORARY diagnostic: surface the raw model response.
-app.get('/api/_diag', async (c) => {
-  try {
-    const r = await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as never, {
-      messages: [
-        { role: 'system', content: 'Reply with STRICT JSON only: {ok:true}' },
-        { role: 'user', content: 'Give me the json.' },
-      ],
-      max_tokens: 128,
-    } as never);
-    return c.json({ ok: true, raw: r });
-  } catch (e) {
-    return c.json({ ok: false, error: String(e) });
-  }
-});
 
 /**
  * Render one beat and record the result.
@@ -235,26 +287,42 @@ async function renderAndStore(env: Env, beat: Beat & { bookId: string }): Promis
       .where(and(eq(illustrations.beatId, beat.id), eq(illustrations.styleId, STYLE.id)));
 
   try {
-    const cast = await db.select().from(characters).where(eq(characters.bookId, beat.bookId));
+    const cast = await loadCast(db, beat.bookId, beat.characterIds);
 
-    // Everyone in this beat needs a reference sheet before they can be drawn
-    // consistently. Generated once per character, then reused for the book.
-    const appearing = cast.filter((ch) => beat.characterIds.includes(ch.id));
+    // Each character needs a reference sheet for the era this beat sits in.
+    // A character who is physically remade partway through the book gets one
+    // sheet per era, so art matches who they were at this point in the story.
     const resolved = await Promise.all(
-      appearing.map(async (ch) => {
-        if (ch.referenceKey) return ch;
+      cast.map(async (character) => {
+        const era = appearanceAt(character, beat.spineIndex);
+        if (!era || era.referenceKey) return character;
+
         try {
-          const referenceKey = await renderReferenceSheet(env, ch);
-          await db.update(characters).set({ referenceKey }).where(eq(characters.id, ch.id));
-          return { ...ch, referenceKey };
+          const referenceKey = await renderReferenceSheet(env, character, era);
+          await db
+            .update(characterAppearances)
+            .set({ referenceKey })
+            .where(
+              and(
+                eq(characterAppearances.characterId, character.id),
+                eq(characterAppearances.fromSpineIndex, era.fromSpineIndex),
+              ),
+            );
+          return withReferenceKey(character, era.fromSpineIndex, referenceKey);
         } catch {
           // A missing sheet costs consistency, not the illustration itself.
-          return ch;
+          return character;
         }
       }),
     );
 
-    const { key, width, height } = await renderBeat(env, beat, resolved);
+    // Text-only place descriptors, so a location reads the same way every time
+    // it appears without paying for a reference image per setting.
+    const places = beat.settingId
+      ? await db.select().from(settings).where(eq(settings.id, beat.settingId))
+      : [];
+
+    const { key, width, height } = await renderBeat(env, beat, resolved, places);
 
     await db
       .update(illustrations)
@@ -265,6 +333,55 @@ async function renderAndStore(env: Env, beat: Beat & { bookId: string }): Promis
     // so record the failure and let the client stop waiting on it.
     await markFailed(error instanceof Error ? error.message : String(error)).catch(() => {});
   }
+}
+
+
+/**
+ * Assemble the cast for a beat: each character with every appearance they have,
+ * so the render step can pick the one in force at this point in the book.
+ */
+async function loadCast(
+  db: ReturnType<typeof drizzle>,
+  bookId: string,
+  characterIds: readonly string[],
+): Promise<CharacterSheet[]> {
+  if (characterIds.length === 0) return [];
+
+  const [rows, eras] = await Promise.all([
+    db.select().from(characters).where(inArray(characters.id, [...characterIds])),
+    db
+      .select()
+      .from(characterAppearances)
+      .where(eq(characterAppearances.bookId, bookId)),
+  ]);
+
+  return rows.map((row) => ({
+    id: row.id,
+    bookId: row.bookId,
+    name: row.name,
+    appearances: eras
+      .filter((e) => e.characterId === row.id)
+      .map((e) => ({
+        fromSpineIndex: e.fromSpineIndex,
+        descriptor: e.descriptor,
+        referenceKey: e.referenceKey,
+      }))
+      .sort((a, b) => a.fromSpineIndex - b.fromSpineIndex),
+  }));
+}
+
+/** Immutably attach a freshly rendered reference sheet to one era. */
+function withReferenceKey(
+  character: CharacterSheet,
+  fromSpineIndex: number,
+  referenceKey: string,
+): CharacterSheet {
+  return {
+    ...character,
+    appearances: character.appearances.map((a) =>
+      a.fromSpineIndex === fromSpineIndex ? { ...a, referenceKey } : a,
+    ),
+  };
 }
 
 export default app;

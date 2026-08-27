@@ -20,8 +20,9 @@ const TARGET_SPACING = 14;
 const SYSTEM = `You identify moments in a novel that deserve an illustration, in the style of a Japanese light novel.
 
 Return STRICT JSON:
-{"beats":[{"paraIndex":N,"kind":"character|scene|action|item","prompt":"...","characters":["Name"],"salience":0.0-1.0}],
- "cast":[{"name":"Name","descriptor":"physical appearance only"}]}
+{"beats":[{"paraIndex":N,"kind":"character|scene|action|item","prompt":"...","characters":["Name"],"setting":"Place Name","salience":0.0-1.0}],
+ "cast":[{"name":"Name","descriptor":"physical appearance only"}],
+ "places":[{"name":"Place Name","descriptor":"what the place looks like"}]}
 
 Rules:
 - "character": a person is introduced or described for the first time.
@@ -34,18 +35,23 @@ Rules:
 - Prefer the START of a moment, so the art appears as it begins.
 - cast: for every named person appearing here, give a purely PHYSICAL descriptor
   (hair, eyes, build, clothing). No personality, no plot. This is what keeps a
-  character looking like themselves across the whole book.`;
+  character looking like themselves across the whole book.
+- places: for every distinct location a beat happens in, give a VISUAL descriptor
+  (architecture, materials, light, weather, era). No events, no people. This is
+  what keeps a location looking like itself across the whole book.
+- setting: on each beat, the name of the place it happens in, matching a places
+  entry. Use null if the location is not identifiable.`;
 
 export async function analyzeSection(
   env: Env,
   bookId: string,
   spineIndex: number,
   paragraphs: readonly string[],
-): Promise<{ beats: Beat[]; cast: CastEntry[] }> {
+): Promise<AnalysisResult> {
   const meaningful = paragraphs
     .map((text, index) => ({ index, text }))
     .filter((p) => p.text.length > 40);
-  if (meaningful.length === 0) return { beats: [], cast: [] };
+  if (meaningful.length === 0) return { beats: [], cast: [], places: [] };
 
   // A single chapter can easily exceed the model's context window, and many
   // EPUBs ship one long section per chapter. Split into windows that fit, or
@@ -58,7 +64,8 @@ export async function analyzeSection(
 
   const beats = results.flatMap((r) => r.beats).sort((a, b) => a.paraIndex - b.paraIndex);
   const cast = dedupeById(results.flatMap((r) => r.cast));
-  return { beats, cast };
+  const places = dedupeById(results.flatMap((r) => r.places));
+  return { beats, cast, places };
 }
 
 async function analyzeWindow(
@@ -67,7 +74,7 @@ async function analyzeWindow(
   spineIndex: number,
   window: readonly { index: number; text: string }[],
   paragraphCount: number,
-): Promise<{ beats: Beat[]; cast: CastEntry[] }> {
+): Promise<AnalysisResult> {
   const budget = Math.max(1, Math.round(window.length / TARGET_SPACING));
   const numbered = window.map((p) => `[${p.index}] ${truncate(p.text, 400)}`).join('\n\n');
 
@@ -88,11 +95,12 @@ async function analyzeWindow(
     return {
       beats: parseBeats(payload, bookId, spineIndex, paragraphCount),
       cast: parseCast(payload),
+      places: parsePlaces(payload),
     };
   } catch (error) {
     // One failed window shouldn't cost the whole chapter its illustrations.
     console.error('analyze window failed:', error);
-    return { beats: [], cast: [] };
+    return { beats: [], cast: [], places: [] };
   }
 }
 
@@ -147,6 +155,7 @@ function toBeat(
   const characters = Array.isArray(o?.characters)
     ? (o.characters as unknown[]).filter((c): c is string => typeof c === 'string')
     : [];
+  const setting = typeof o?.setting === 'string' ? o.setting.trim() : '';
 
   return {
     id: `${bookId}-${spineIndex}-${paraIndex}`,
@@ -156,6 +165,7 @@ function toBeat(
     kind,
     prompt,
     characterIds: characters.map((n) => `${bookId}:${slugify(n)}`),
+    settingId: setting.length > 0 ? `${bookId}:${slugify(setting)}` : null,
     salience: clamp01(Number(o?.salience ?? 0.5)),
   };
 }
@@ -199,6 +209,13 @@ function slugify(name: string): string {
 
 export { TARGET_SPACING };
 
+/** What one analysis pass yields. */
+export interface AnalysisResult {
+  beats: Beat[];
+  cast: CastEntry[];
+  places: CastEntry[];
+}
+
 /** A character's physical description, harvested during section analysis. */
 export interface CastEntry {
   id: string;
@@ -212,7 +229,20 @@ export interface CastEntry {
  * the rest of the book.
  */
 function parseCast(parsed: unknown): CastEntry[] {
-  const list = (parsed as { cast?: unknown[] })?.cast;
+  return parseNamedDescriptors((parsed as { cast?: unknown[] })?.cast);
+}
+
+/**
+ * Recurring places. Text only — the descriptor is prepended to the prompt so a
+ * tavern in chapter 9 is described the same way it was in chapter 1, without
+ * paying for a reference image per location.
+ */
+function parsePlaces(parsed: unknown): CastEntry[] {
+  return parseNamedDescriptors((parsed as { places?: unknown[] })?.places);
+}
+
+/** Shared shape: a list of {name, descriptor}, slugged and deduped. */
+function parseNamedDescriptors(list: unknown): CastEntry[] {
   if (!Array.isArray(list)) return [];
 
   const seen = new Set<string>();
