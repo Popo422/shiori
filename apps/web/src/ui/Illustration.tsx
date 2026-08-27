@@ -4,51 +4,56 @@ import type { Beat } from '@shiori/core';
 interface Props {
   url: string;
   beat: Beat;
-  onDismiss(): void;
+  onAdvance(): void;
+  onBack(): void;
 }
 
 /**
- * An illustration surfaces as a peek at the bottom of the page; tapping opens it
- * full-bleed. It never interrupts the text — the reader chooses to look.
+ * A full-page plate, the way a light novel prints one: you turn into the art,
+ * look at it, and turn again into the text.
+ *
+ * Landscape beats — a fight kicking off, an establishing shot — go full bleed.
+ * A character portrait sits centered with margins, like a colour insert.
  */
-export function Illustration({ url, beat, onDismiss }: Props) {
-  const [expanded, setExpanded] = useState(false);
+export function Illustration({ url, beat, onAdvance, onBack }: Props) {
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    setLoaded(false);
-    setExpanded(false);
-  }, [url]);
+  useEffect(() => setLoaded(false), [url]);
 
   useEffect(() => {
-    if (!expanded) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setExpanded(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') onAdvance();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') onBack();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [expanded]);
+  }, [onAdvance, onBack]);
 
-  if (expanded) {
-    return (
-      <div className="lightbox" onClick={() => setExpanded(false)} role="dialog" aria-modal="true">
-        <img src={url} alt={beat.prompt} className="lightbox__image" />
-        <p className="lightbox__caption">{beat.prompt}</p>
-        <button className="lightbox__close" onClick={() => setExpanded(false)} aria-label="Close">
-          ✕
-        </button>
-      </div>
-    );
-  }
+  const bleed = beat.kind === 'action' || beat.kind === 'scene';
 
   return (
-    <figure className={`peek peek--${beat.kind} ${loaded ? 'is-loaded' : ''}`}>
-      <button className="peek__button" onClick={() => setExpanded(true)}>
-        <img src={url} alt={beat.prompt} loading="lazy" onLoad={() => setLoaded(true)} />
-        <span className="peek__label">{KIND_LABEL[beat.kind]}</span>
-      </button>
-      <button className="peek__dismiss" onClick={onDismiss} aria-label="Hide illustration">
-        ✕
-      </button>
-    </figure>
+    <div
+      className={`plate ${bleed ? 'plate--bleed' : 'plate--inset'} ${loaded ? 'is-loaded' : ''}`}
+      role="img"
+      aria-label={beat.prompt}
+    >
+      <img
+        className="plate__image"
+        src={url}
+        alt={beat.prompt}
+        onLoad={() => setLoaded(true)}
+        draggable={false}
+      />
+
+      {/* Same three tap zones as the text, so paging never changes its rules. */}
+      <div className="zones">
+        <button className="zone" onClick={onBack} aria-label="Previous page" />
+        <button className="zone" onClick={onAdvance} aria-label="Continue reading" />
+        <button className="zone" onClick={onAdvance} aria-label="Continue reading" />
+      </div>
+
+      <p className="plate__hint">{KIND_LABEL[beat.kind]}</p>
+    </div>
   );
 }
 

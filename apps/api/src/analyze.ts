@@ -14,7 +14,21 @@ const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
  */
 const PARAGRAPHS_PER_WINDOW = 120;
 
-/** Roughly one illustration per this many paragraphs. Tunes density. */
+/**
+ * Illustrations per chapter.
+ *
+ * A printed light novel carries a colour insert and a few interior plates per
+ * volume, not per chapter. Since art is now a full page the reader turns
+ * through, frequency is a cost: too much of it and a plate stops being an event
+ * and becomes a toll booth. Two per chapter keeps it regular but scarce.
+ */
+const BEATS_PER_SECTION = 2;
+
+/**
+ * Paragraph spacing used only to ask the model for candidates. We deliberately
+ * request more than we keep, then take the most salient — picking the best two
+ * beats out of six is a better chapter than taking the first two.
+ */
 const TARGET_SPACING = 14;
 
 const SYSTEM = `You identify moments in a novel that deserve an illustration, in the style of a Japanese light novel.
@@ -62,7 +76,7 @@ export async function analyzeSection(
     windows.map((window) => analyzeWindow(env, bookId, spineIndex, window, paragraphs.length)),
   );
 
-  const beats = results.flatMap((r) => r.beats).sort((a, b) => a.paraIndex - b.paraIndex);
+  const beats = mostSalient(results.flatMap((r) => r.beats), BEATS_PER_SECTION);
   const cast = dedupeById(results.flatMap((r) => r.cast));
   const places = dedupeById(results.flatMap((r) => r.places));
   return { beats, cast, places };
@@ -260,4 +274,21 @@ function parseNamedDescriptors(list: unknown): CastEntry[] {
       seen.add(c.id);
       return true;
     });
+}
+
+/**
+ * Keep the strongest few beats in a section, in reading order.
+ *
+ * The model is asked for more candidates than we want and scores each one, so
+ * this picks the moments most worth drawing rather than simply the earliest.
+ * A character introduction beats a mood shift three paragraphs later.
+ */
+function mostSalient(candidates: readonly Beat[], limit: number): Beat[] {
+  if (candidates.length <= limit) {
+    return [...candidates].sort((a, b) => a.paraIndex - b.paraIndex);
+  }
+  return [...candidates]
+    .sort((a, b) => b.salience - a.salience)
+    .slice(0, limit)
+    .sort((a, b) => a.paraIndex - b.paraIndex);
 }

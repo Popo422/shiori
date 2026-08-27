@@ -86,18 +86,40 @@ export function Reader({ book, onClose }: Props) {
     [illustrator, book.id],
   );
 
+  const current = illustrator.current;
+  /** The plate to turn into, if the beat under the reader has art they haven't seen. */
+  const plate = current && !dismissed.has(current.beat.id) ? current : null;
+
+  /**
+   * Paging forward turns into the plate first, the way a printed light novel
+   * puts art on its own page. The next turn marks it seen and continues into
+   * the text, so a plate is never shown twice.
+   */
+  const goNext = useCallback(() => {
+    if (plate) {
+      setDismissed((prev) => new Set(prev).add(plate.beat.id));
+      return;
+    }
+    handle.current?.next();
+  }, [plate]);
+
+  const goPrev = useCallback(() => {
+    if (plate) {
+      setDismissed((prev) => new Set(prev).add(plate.beat.id));
+      return;
+    }
+    handle.current?.prev();
+  }, [plate]);
+
   // Keyboard paging, so it works on a laptop too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') handle.current?.next();
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') handle.current?.prev();
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') goNext();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') goPrev();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  const current = illustrator.current;
-  const showArt = current && !dismissed.has(current.beat.id);
+  }, [goNext, goPrev]);
 
   return (
     <div className={`reader reader--${theme}`}>
@@ -113,16 +135,17 @@ export function Reader({ book, onClose }: Props) {
 
       {/* Tap zones: left/right page, center toggles chrome. */}
       <div className="zones" onClick={(e) => e.stopPropagation()}>
-        <button className="zone zone--prev" onClick={() => handle.current?.prev()} aria-label="Previous page" />
+        <button className="zone zone--prev" onClick={goPrev} aria-label="Previous page" />
         <button className="zone zone--menu" onClick={() => setChromeVisible((v) => !v)} aria-label="Toggle menu" />
-        <button className="zone zone--next" onClick={() => handle.current?.next()} aria-label="Next page" />
+        <button className="zone zone--next" onClick={goNext} aria-label="Next page" />
       </div>
 
-      {showArt && current && (
+      {plate && (
         <Illustration
-          url={current.url ?? artUrl(book.id, current.beat.id)}
-          beat={current.beat}
-          onDismiss={() => setDismissed((prev) => new Set(prev).add(current.beat.id))}
+          url={plate.url ?? artUrl(book.id, plate.beat.id)}
+          beat={plate.beat}
+          onAdvance={goNext}
+          onBack={goPrev}
         />
       )}
 
