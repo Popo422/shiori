@@ -25,6 +25,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // Take over as soon as a new version is deployed. Without these, an open
+        // tab keeps serving the previously cached bundle until every tab is
+        // closed, so a deployed fix looks like it did nothing.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         // Illustrations are immutable once generated — cache them hard so a
         // re-read of a book works fully offline.
         runtimeCaching: [

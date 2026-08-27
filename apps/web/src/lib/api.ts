@@ -52,8 +52,9 @@ export function analyzeSection(input: {
   });
 }
 
-export function getBeats(bookId: string, spineIndex: number) {
-  return json<{ beats: Beat[] }>(`/books/${bookId}/beats?spine=${spineIndex}`);
+export function getBeats(bookId: string, spineIndex?: number) {
+  const query = spineIndex === undefined ? '' : `?spine=${spineIndex}`;
+  return json<{ beats: Beat[] }>(`/books/${bookId}/beats${query}`);
 }
 
 /**

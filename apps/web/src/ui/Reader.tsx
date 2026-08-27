@@ -58,22 +58,31 @@ export function Reader({ book, onClose }: Props) {
   );
 
   /**
-   * Each time a section renders, make sure it has beats. Analysis is lazy and
-   * cached server-side, so this is a no-op for any book someone has read before.
+   * Load every beat the book already has, before any section renders.
+   *
+   * A plate inserted into a section you are already reading reflows the page
+   * under you. Knowing the beats up front means the page is reserved as the
+   * section is laid out, so the illustration fills a space that was always
+   * there rather than shoving the text along when it arrives.
    */
+  useEffect(() => {
+    getBeats(book.id)
+      .then(({ beats: found }) => {
+        found.forEach((b) => analyzed.current.add(b.spineIndex));
+        setBeats((prev) => mergeBeats(prev, found));
+      })
+      .catch(() => {});
+  }, [book.id]);
+
   const onSectionLoad = useCallback(
     (spineIndex: number, paragraphs: string[], doc: Document) => {
       setBeatsPerScreen(estimateBeatsPerScreen(doc, TARGET_SPACING));
       if (analyzed.current.has(spineIndex)) return;
       analyzed.current.add(spineIndex);
 
-      getBeats(book.id, spineIndex)
-        .then(({ beats: found }) =>
-          found.length > 0
-            ? found
-            : analyzeSection({ bookId: book.id, spineIndex, paragraphs }).then((r) => r.beats),
-        )
-        .then((found) => setBeats((prev) => mergeBeats(prev, found)))
+      // Only reached for a section nobody has analyzed yet.
+      analyzeSection({ bookId: book.id, spineIndex, paragraphs })
+        .then(({ beats: found }) => setBeats((prev) => mergeBeats(prev, found)))
         .catch(() => analyzed.current.delete(spineIndex));
     },
     [book.id],
