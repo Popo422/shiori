@@ -9,11 +9,19 @@ import type { ReadingPosition } from '@shiori/core';
  * number, which changes on every device.
  */
 export function positionFromRelocate(detail: {
-  index: number;
+  index?: number;
+  section?: { current?: number };
   range?: Range | null;
   fraction?: number;
 }): ReadingPosition {
-  const { index, range, fraction = 0 } = detail;
+  const { range, fraction = 0 } = detail;
+
+  // foliate's relocate event reports the spine index as `section.current`; it
+  // consumes its internal `index` and does not re-emit it. Reading `index` here
+  // yielded undefined on every event, so no beat ever compared as upcoming and
+  // no art was ever requested.
+  const index = detail.section?.current ?? detail.index ?? 0;
+
   if (!range) return { spineIndex: index, paraIndex: 0 };
 
   const doc = range.startContainer.ownerDocument;
