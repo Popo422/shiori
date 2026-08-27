@@ -77,6 +77,12 @@ export function FoliateView({
       await view.open(file);
       if (disposed) return;
 
+      // Page layout, set on the renderer that open() created. foliate centers the
+      // text block itself through these attributes; putting max-width on the
+      // book's own body instead fights that grid and collapses the page into one
+      // narrow column pinned to the left of a wide screen.
+      applyLayout(view);
+
       const book = view.book;
       // The real title, author and cover live in the book's own metadata — much
       // better than the filename guess made when the file was added.
@@ -154,9 +160,6 @@ function applyTheme(doc: Document, theme: Props['theme'], fontScale: number) {
     body {
       font-size: ${fontScale}em !important;
       line-height: 1.65 !important;
-      max-width: 42em;
-      margin-inline: auto !important;
-      padding-inline: 1.1em !important;
     }
     p { text-align: justify; hyphens: auto; }
     a { color: inherit !important; text-decoration-color: ${fg}66; }
@@ -209,4 +212,23 @@ function storyStart(book: any): string | null {
   });
 
   return first?.href ?? null;
+}
+
+/**
+ * Page geometry.
+ *
+ * `max-inline-size` is the measure of a single column, and `max-column-count`
+ * lets a wide screen show a two-page spread instead of one column stranded on
+ * the left. foliate applies its own centering grid around these, so nothing here
+ * should be duplicated as CSS on the book's body.
+ */
+function applyLayout(view: any): void {
+  const renderer = view?.renderer;
+  if (!renderer?.setAttribute) return;
+  // Only the measure is ours; gap and margin keep foliate's defaults, which its
+  // column snapping is calibrated against. Overriding gap misaligns the columns
+  // and bleeds text off the edge of a wide screen.
+  renderer.setAttribute('max-inline-size', '640px');
+  renderer.setAttribute('max-block-size', '1400px');
+  renderer.setAttribute('max-column-count', '2');
 }
