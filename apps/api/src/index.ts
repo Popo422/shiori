@@ -200,6 +200,22 @@ app.get('/api/art/:bookId/:beatId', async (c) => {
 
 app.get('/api/health', (c) => c.json({ ok: true }));
 
+// TEMPORARY diagnostic: surface the raw model response.
+app.get('/api/_diag', async (c) => {
+  try {
+    const r = await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as never, {
+      messages: [
+        { role: 'system', content: 'Reply with STRICT JSON only: {ok:true}' },
+        { role: 'user', content: 'Give me the json.' },
+      ],
+      max_tokens: 128,
+    } as never);
+    return c.json({ ok: true, raw: r });
+  } catch (e) {
+    return c.json({ ok: false, error: String(e) });
+  }
+});
+
 /**
  * Render one beat and record the result.
  *

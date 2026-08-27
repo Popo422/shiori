@@ -84,13 +84,14 @@ async function analyzeWindow(
       temperature: 0.4,
     } as never)) as { response?: string };
 
-    const raw = response?.response ?? '';
+    const payload = toPayload(response?.response);
     return {
-      beats: parseBeats(raw, bookId, spineIndex, paragraphCount),
-      cast: parseCast(raw),
+      beats: parseBeats(payload, bookId, spineIndex, paragraphCount),
+      cast: parseCast(payload),
     };
-  } catch {
+  } catch (error) {
     // One failed window shouldn't cost the whole chapter its illustrations.
+    console.error('analyze window failed:', error);
     return { beats: [], cast: [] };
   }
 }
@@ -110,21 +111,11 @@ function dedupeById(entries: readonly CastEntry[]): CastEntry[] {
 
 /** The model is not guaranteed to return clean JSON; recover what we can. */
 function parseBeats(
-  raw: string,
+  parsed: unknown,
   bookId: string,
   spineIndex: number,
   paragraphCount: number,
 ): Beat[] {
-  const json = extractJson(raw);
-  if (!json) return [];
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return [];
-  }
-
   const list = (parsed as { beats?: unknown[] })?.beats;
   if (!Array.isArray(list)) return [];
 
@@ -174,10 +165,24 @@ function normalizeKind(value: unknown): BeatKind {
   return kinds.includes(value as BeatKind) ? (value as BeatKind) : 'scene';
 }
 
-function extractJson(raw: string): string | null {
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  return start >= 0 && end > start ? raw.slice(start, end + 1) : null;
+/**
+ * Workers AI returns `response` as an already-parsed object when the model emits
+ * clean JSON, and as a string when it wraps the JSON in prose. Accept both —
+ * assuming a string here threw on every call and silently cost the whole book
+ * its illustrations.
+ */
+function toPayload(response: unknown): unknown {
+  if (response && typeof response === 'object') return response;
+  if (typeof response !== 'string') return null;
+
+  const start = response.indexOf('{');
+  const end = response.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(response.slice(start, end + 1));
+  } catch {
+    return null;
+  }
 }
 
 function truncate(s: string, n: number): string {
@@ -206,17 +211,7 @@ export interface CastEntry {
  * These become reference sheets, which is what keeps a character on-model for
  * the rest of the book.
  */
-function parseCast(raw: string): CastEntry[] {
-  const json = extractJson(raw);
-  if (!json) return [];
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return [];
-  }
-
+function parseCast(parsed: unknown): CastEntry[] {
   const list = (parsed as { cast?: unknown[] })?.cast;
   if (!Array.isArray(list)) return [];
 

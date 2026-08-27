@@ -31,18 +31,17 @@ export async function renderBeat(
   const prompt = buildPrompt(beat, cast);
   const references = await loadReferences(env, beat, cast);
 
-  const inputs: Record<string, unknown> = {
-    prompt: `${prompt}. Avoid: ${STYLE.negative}`,
-    width,
-    height,
-    seed: stableSeed(beat.id),
-  };
-  // Positional reference slots: input_image_0..3.
-  references.forEach((data, i) => {
-    inputs[`input_image_${i}`] = data;
-  });
+  const form = new FormData();
+  form.append('prompt', `${prompt}. Avoid: ${STYLE.negative}`);
+  form.append('width', String(width));
+  form.append('height', String(height));
+  form.append('seed', String(stableSeed(beat.id)));
+  // Positional reference slots: input_image_0..3, as binary parts.
+  references.forEach((blob, i) => form.append(`input_image_${i}`, blob));
 
-  const result = (await env.AI.run(MODEL as never, inputs as never)) as { image?: string };
+  const result = (await env.AI.run(MODEL as never, {
+    multipart: toMultipart(form),
+  } as never)) as { image?: string };
   if (!result?.image) throw new Error('model returned no image');
 
   const bytes = base64ToBytes(result.image);
@@ -58,11 +57,24 @@ export async function renderBeat(
   return { key, width, height };
 }
 
+/**
+ * FLUX.2 klein takes a real multipart body, not a JSON object. Serializing the
+ * FormData through a Response is how you get the stream and its boundary-bearing
+ * content type, which is what the binding expects.
+ */
+function toMultipart(form: FormData): { body: ReadableStream | null; contentType: string | null } {
+  const response = new Response(form);
+  return {
+    body: response.body,
+    contentType: response.headers.get('content-type'),
+  };
+}
+
 async function loadReferences(
   env: Env,
   beat: Beat,
   cast: readonly CharacterSheet[],
-): Promise<string[]> {
+): Promise<Blob[]> {
   const keys = cast
     .filter((c) => beat.characterIds.includes(c.id) && c.referenceKey)
     .slice(0, 4)
@@ -72,10 +84,10 @@ async function loadReferences(
     keys.map(async (key) => {
       const obj = await env.ART.get(key);
       if (!obj) return null;
-      return bytesToBase64(new Uint8Array(await obj.arrayBuffer()));
+      return new Blob([await obj.arrayBuffer()], { type: 'image/jpeg' });
     }),
   );
-  return loaded.filter((x): x is string => x !== null);
+  return loaded.filter((x): x is Blob => x !== null);
 }
 
 /**
@@ -97,12 +109,6 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] as number);
-  return btoa(bin);
-}
-
 export { MAX_REFERENCE_EDGE };
 
 /**
@@ -119,14 +125,19 @@ export async function renderReferenceSheet(
   env: Env,
   character: CharacterSheet,
 ): Promise<string> {
-  const result = (await env.AI.run(MODEL as never, {
-    prompt:
-      `${STYLE.positive}. Character reference sheet, single figure, front facing, ` +
+  const form = new FormData();
+  form.append(
+    'prompt',
+    `${STYLE.positive}. Character reference sheet, single figure, front facing, ` +
       `neutral grey background, even lighting, full body, neutral expression. ` +
       `${character.descriptor}. Avoid: ${STYLE.negative}, multiple views, text labels`,
-    width: MAX_REFERENCE_EDGE,
-    height: MAX_REFERENCE_EDGE,
-    seed: stableSeed(character.id),
+  );
+  form.append('width', String(MAX_REFERENCE_EDGE));
+  form.append('height', String(MAX_REFERENCE_EDGE));
+  form.append('seed', String(stableSeed(character.id)));
+
+  const result = (await env.AI.run(MODEL as never, {
+    multipart: toMultipart(form),
   } as never)) as { image?: string };
 
   if (!result?.image) throw new Error('model returned no reference image');
