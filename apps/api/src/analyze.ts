@@ -47,6 +47,10 @@ Rules:
 - "action": a fight, chase, or set piece begins.
 - "item": an object of clear plot significance appears.
 - prompt: ONE vivid visual sentence. Describe only what is SEEN — no names, no plot, no dialogue.
+- Keep prompts suitable for a published book cover. Convey a violent or grim
+  moment through atmosphere, posture and aftermath rather than depicting injury,
+  blood, death or restraint. An image generator refuses the explicit version, and
+  a refused prompt means no illustration at all for that moment.
 - Never place a beat on a paragraph that reveals a later twist.
 - paraIndex must be the index of a paragraph given to you.
 - Prefer the START of a moment, so the art appears as it begins.

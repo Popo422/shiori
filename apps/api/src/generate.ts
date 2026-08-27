@@ -46,9 +46,20 @@ export async function renderBeat(
   // Positional reference slots: input_image_0..3, as binary parts.
   references.forEach((blob, i) => form.append(`input_image_${i}`, blob));
 
-  const result = (await env.AI.run(MODEL as never, {
-    multipart: toMultipart(form),
-  } as never)) as { image?: string };
+  let result: { image?: string };
+  try {
+    result = (await env.AI.run(MODEL as never, {
+      multipart: toMultipart(form),
+    } as never)) as { image?: string };
+  } catch (error) {
+    // The model refuses prompts it judges unsafe, and a book like this one
+    // supplies plenty — a hanging, a beating. Rather than lose the illustration
+    // entirely, retry once describing the moment by its setting and mood.
+    if (!isFlagged(error)) throw error;
+    result = (await env.AI.run(MODEL as never, {
+      multipart: toMultipart(softened(prompt, width, height, beat)),
+    } as never)) as { image?: string };
+  }
   if (!result?.image) throw new Error('model returned no image');
 
   const bytes = base64ToBytes(result.image);
@@ -155,4 +166,30 @@ export async function renderReferenceSheet(
     },
   });
   return key;
+}
+
+/** The model reports a refused prompt as error 3030. */
+function isFlagged(error: unknown): boolean {
+  return String(error).includes('3030') || /flagged/i.test(String(error));
+}
+
+/**
+ * A gentler second attempt: keep the world and the place, drop the moment.
+ *
+ * The beat's own sentence is what carries the violence, so an establishing shot
+ * of the same setting still illustrates the scene without depicting it.
+ */
+function softened(prompt: string, width: number, height: number, beat: Beat): FormData {
+  const setting = prompt.split('. ').filter((part) => !part.includes(beat.prompt));
+
+  const form = new FormData();
+  form.append(
+    'prompt',
+    `${setting.join('. ')}. An establishing shot of this place, empty of people, ` +
+      `sombre and still. Avoid: ${STYLE.negative}`,
+  );
+  form.append('width', String(width));
+  form.append('height', String(height));
+  form.append('seed', String(stableSeed(`${beat.id}#safe`)));
+  return form;
 }

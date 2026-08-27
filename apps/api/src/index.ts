@@ -201,6 +201,19 @@ app.post('/api/art', async (c) => {
     .where(and(eq(illustrations.styleId, STYLE.id), inArray(illustrations.beatId, beatIds)));
 
   const known = new Map(existing.map((row) => [row.beatId, row]));
+
+  /**
+   * A render that never wrote back leaves its row claimed forever.
+   *
+   * waitUntil work dies with the isolate — a deploy mid-render, an eviction, a
+   * timeout — and nothing retries it, so the plate stays a skeleton for good.
+   * Treat a long-stale claim as abandoned and let it be picked up again.
+   */
+  const stale = existing.filter(
+    (row) => row.status === 'pending' && Date.now() - row.createdAt > STALE_RENDER_MS,
+  );
+  stale.forEach((row) => known.delete(row.beatId));
+
   const missing = beatIds.filter((id) => !known.has(id));
 
   if (missing.length > 0) {
@@ -221,7 +234,12 @@ app.post('/api/art', async (c) => {
           height,
           createdAt: Date.now(),
         })
-        .onConflictDoNothing();
+        // Reclaim rather than skip: an abandoned row must be able to start over,
+        // and a fresh createdAt is what stops it being reclaimed again mid-render.
+        .onConflictDoUpdate({
+          target: [illustrations.beatId, illustrations.styleId],
+          set: { status: 'pending', key: null, error: null, createdAt: Date.now() },
+        });
       known.set(beat.id, {
         beatId: beat.id,
         styleId: STYLE.id,
@@ -308,6 +326,9 @@ app.post('/api/art/regenerate', async (c) => {
 
   return c.json({ beatId, status: 'pending', attempt });
 });
+
+/** How long a claimed render may go silent before another request may retry it. */
+const STALE_RENDER_MS = 3 * 60 * 1000;
 
 app.get('/api/health', (c) => c.json({ ok: true }));
 
