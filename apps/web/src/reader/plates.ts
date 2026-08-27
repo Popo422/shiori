@@ -183,3 +183,31 @@ export function visiblePlate(doc: Document): string | null {
   }
   return null;
 }
+
+/**
+ * Warm the browser cache for illustrations the reader is about to reach.
+ *
+ * The lookahead decides what to *generate*; this decides what to *download*.
+ * Without it a plate that finished rendering minutes ago still shows blank for
+ * a beat while the JPEG comes over the wire, because the fetch only starts when
+ * the page is already on screen.
+ *
+ * Decoding as well as fetching, so the image is ready to paint rather than
+ * merely present in cache.
+ */
+export function prefetch(urls: readonly string[]): void {
+  for (const url of urls) {
+    if (warmed.has(url)) continue;
+    warmed.add(url);
+
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+    // Failures are not worth reporting: the plate retries on its own when the
+    // reader actually arrives.
+    img.decode?.().catch(() => {});
+  }
+}
+
+/** Prefetching the same URL twice is wasted bandwidth on a phone. */
+const warmed = new Set<string>();

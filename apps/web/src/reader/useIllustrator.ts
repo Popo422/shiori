@@ -49,6 +49,29 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
   const velocity = useRef(new VelocityTracker());
   const inflight = useRef<Set<string>>(new Set());
 
+  /**
+   * Mirror of art for guard checks.
+   *
+   * Depending on art directly made this effect re-run on its own responses:
+   * every reply called setArt, which re-triggered the request, which produced
+   * hundreds of POSTs per chapter on a fast reader.
+   */
+  const artRef = useRef(art);
+  artRef.current = art;
+
+  /**
+   * How many illustrations are rendering.
+   *
+   * The poll effect keys off this count rather than the art map itself: the map
+   * gets a new identity on every response, which would restart the interval
+   * continuously, while the count only changes when work actually starts or
+   * finishes.
+   */
+  const pendingCount = useMemo(
+    () => [...art.values()].filter((a) => a.status === 'pending').length,
+    [art],
+  );
+
   const telemetry = useMemo<ReaderTelemetry>(
     () => ({
       msPerParagraph: velocity.current.median(),
@@ -81,7 +104,7 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     const wanted = selectBeats(beats, position, telemetry);
     const missing = wanted
       .map((b) => b.id)
-      .filter((id) => art.get(id)?.status !== 'ready' && !inflight.current.has(id));
+      .filter((id) => artRef.current.get(id)?.status !== 'ready' && !inflight.current.has(id));
     if (missing.length === 0) return;
 
     missing.forEach((id) => inflight.current.add(id));
@@ -89,23 +112,34 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
 
     requestArt({ bookId, beatIds: missing })
       .then(({ art: states }) => {
-        if (cancelled) return;
+        // The request itself is not wasted even when this effect has been
+        // superseded — the server has already claimed the work, and the reply
+        // still tells us what is rendering. Record it rather than discarding it.
         setArt((prev) => merge(prev, states));
         states
           .filter((s) => s.status !== 'pending')
           .forEach((s) => inflight.current.delete(s.beatId));
       })
-      .catch(() => missing.forEach((id) => inflight.current.delete(id)));
+      .catch(() => missing.forEach((id) => inflight.current.delete(id)))
+      .finally(() => {
+        // Turning a page re-runs this effect and tears down the previous one.
+        // Without releasing the claim here, a beat whose request was in flight
+        // at that moment stayed marked inflight forever and was never asked for
+        // again — a plate that simply never loaded.
+        if (cancelled) missing.forEach((id) => inflight.current.delete(id));
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [bookId, position, beats, telemetry, art]);
+  }, [bookId, position, beats, telemetry]);
 
   // Poll while anything is still rendering.
   useEffect(() => {
     if (!bookId) return;
-    const pending = [...art.values()].filter((a) => a.status === 'pending').map((a) => a.beatId);
+    const pending = [...artRef.current.values()]
+      .filter((a) => a.status === 'pending')
+      .map((a) => a.beatId);
     if (pending.length === 0) return;
 
     let elapsed = 0;
@@ -139,7 +173,7 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     }, POLL_MS);
 
     return () => clearInterval(timer);
-  }, [bookId, art]);
+  }, [bookId, pendingCount]);
 
   /** The beat the reader is inside, whatever state its art is in. */
   const currentBeat = useMemo(() => {
@@ -157,7 +191,7 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
         : null,
     ready: art,
     depth: lookaheadDepth(telemetry),
-    pending: [...art.values()].filter((a) => a.status === 'pending').length,
+    pending: pendingCount,
     currentFailed: currentState?.status === 'failed',
     markPending,
     onRelocate,

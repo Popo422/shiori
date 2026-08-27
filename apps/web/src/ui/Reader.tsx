@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Beat, ReadingPosition } from '@shiori/core';
 import { FoliateView, type FoliateHandle } from '../reader/FoliateView';
 import { useIllustrator } from '../reader/useIllustrator';
-import { syncPlates, visiblePlate, type PlateSource } from '../reader/plates';
+import { syncPlates, visiblePlate, prefetch, type PlateSource } from '../reader/plates';
 import { analyzeSection, getBeats, registerBook, regenerateArt, artUrl } from '../lib/api';
 import { estimateBeatsPerScreen } from '../lib/position';
 import { rememberLocation, updateMetadata, type StoredBook } from '../lib/db';
@@ -25,6 +25,7 @@ export function Reader({ book, onClose }: Props) {
   const [redrawing, setRedrawing] = useState(false);
 
   const handle = useRef<FoliateHandle | null>(null);
+  const plateSources = useRef<PlateSource[]>([]);
   const analyzed = useRef<Set<number>>(new Set());
 
   const entry = book.lastLocation ? 'restore' : 'linear';
@@ -77,6 +78,11 @@ export function Reader({ book, onClose }: Props) {
   const onSectionLoad = useCallback(
     (spineIndex: number, paragraphs: string[], doc: Document) => {
       setBeatsPerScreen(estimateBeatsPerScreen(doc, TARGET_SPACING));
+
+      // Populate this section now. The sync effect only runs when React state
+      // changes, so a section rendered after the last run would otherwise show
+      // no plate at all until something unrelated happened to trigger it.
+      syncPlates(doc, spineIndex, plateSources.current);
       if (analyzed.current.has(spineIndex)) return;
       analyzed.current.add(spineIndex);
 
@@ -121,7 +127,12 @@ export function Reader({ book, onClose }: Props) {
       })
       .filter((p): p is PlateSource => p !== null);
 
+    plateSources.current = sources;
     for (const { doc, index } of docs) syncPlates(doc, index, sources);
+
+    // Download ahead of the reader. A plate rendered long ago still flashes
+    // blank if its JPEG only starts downloading once the page is on screen.
+    prefetch(sources.map((s) => s.url).filter((u): u is string => u !== null));
   }, [beats, illustrator.ready, book.id]);
 
   /** Recheck after a turn settles; relocate does not fire on every page. */
