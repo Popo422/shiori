@@ -1,0 +1,1 @@
+ALTER TABLE `illustrations` ADD `attempt` integer DEFAULT 0 NOT NULL;

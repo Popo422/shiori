@@ -93,6 +93,8 @@ export const illustrations = sqliteTable(
     width: integer('width').notNull(),
     height: integer('height').notNull(),
     error: text('error'),
+    /** Re-roll counter, folded into the seed so a regenerate differs. */
+    attempt: integer('attempt').notNull().default(0),
     createdAt: integer('created_at').notNull(),
   },
   (t) => [

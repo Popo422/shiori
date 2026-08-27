@@ -221,6 +221,7 @@ app.post('/api/art', async (c) => {
         width,
         height,
         error: null,
+        attempt: 0,
         createdAt: Date.now(),
       });
     }
@@ -265,6 +266,39 @@ app.get('/api/art/:bookId/:beatId', async (c) => {
   });
 });
 
+/**
+ * Draw a beat again, when the reader doesn't like what came back.
+ *
+ * The seed is normally derived from the beat id so a retry reproduces the same
+ * image; here we want a different one, so the attempt number is folded in and
+ * stored. Everyone else reading this book gets the newer image too — art is
+ * shared, and a re-roll is an improvement rather than a personal preference.
+ */
+app.post('/api/art/regenerate', async (c) => {
+  const { bookId, beatId } = await c.req.json<{ bookId: string; beatId: string }>();
+  const db = drizzle(c.env.DB);
+
+  const [beat] = await db.select().from(beats).where(eq(beats.id, beatId)).limit(1);
+  if (!beat) return c.json({ error: 'unknown beat' }, 404);
+
+  const [existing] = await db
+    .select()
+    .from(illustrations)
+    .where(and(eq(illustrations.beatId, beatId), eq(illustrations.styleId, STYLE.id)))
+    .limit(1);
+
+  const attempt = (existing?.attempt ?? 0) + 1;
+
+  await db
+    .update(illustrations)
+    .set({ status: 'pending', key: null, error: null, attempt })
+    .where(and(eq(illustrations.beatId, beatId), eq(illustrations.styleId, STYLE.id)));
+
+  c.executionCtx.waitUntil(renderAndStore(c.env, { ...beat, bookId }, attempt));
+
+  return c.json({ beatId, status: 'pending', attempt });
+});
+
 app.get('/api/health', (c) => c.json({ ok: true }));
 
 
@@ -277,7 +311,11 @@ app.get('/api/health', (c) => c.json({ ok: true }));
  * prevented by the pending row claimed in D1, not by the queue, so nothing is
  * lost by rendering here.
  */
-async function renderAndStore(env: Env, beat: Beat & { bookId: string }): Promise<void> {
+async function renderAndStore(
+  env: Env,
+  beat: Beat & { bookId: string },
+  attempt = 0,
+): Promise<void> {
   const db = drizzle(env.DB);
 
   const markFailed = (reason: string) =>
@@ -322,7 +360,7 @@ async function renderAndStore(env: Env, beat: Beat & { bookId: string }): Promis
       ? await db.select().from(settings).where(eq(settings.id, beat.settingId))
       : [];
 
-    const { key, width, height } = await renderBeat(env, beat, resolved, places);
+    const { key, width, height } = await renderBeat(env, beat, resolved, places, attempt);
 
     await db
       .update(illustrations)

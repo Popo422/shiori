@@ -422,73 +422,36 @@ button {
   .spinner { animation-duration: 2s; }
 }
 
-/* ---------------------------------- Plate --------------------------------- */
+
+/* --------------------------------- Redraw --------------------------------- */
 
 /*
-   A full-page illustration, the way a light novel prints one. It covers the
-   reader entirely — you turn into the art, then turn again into the text.
+   Offered only while an illustration is the page on screen, so it never parks
+   a control over the text.
  */
-.plate {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  background: var(--paper);
-  display: grid;
-  place-items: center;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-}
-
-.plate.is-loaded {
-  opacity: 1;
-}
-
-.plate__image {
-  display: block;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
-/* Action and scene beats are landscape — let them fill the page edge to edge. */
-.plate--bleed .plate__image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* A character portrait sits inset, like a colour insert bound into the book. */
-.plate--inset .plate__image {
-  max-width: min(88vw, 30rem);
-  max-height: 82vh;
-  object-fit: contain;
-  border-radius: 3px;
-  box-shadow: 0 10px 40px rgb(0 0 0 / 0.35);
-}
-
-.plate__hint {
+.redraw {
   position: absolute;
   left: 50%;
   bottom: calc(var(--safe-bottom) + 1.1rem);
   transform: translateX(-50%);
-  margin: 0;
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  background: color-mix(in srgb, var(--paper) 78%, transparent);
-  padding: 0.25rem 0.7rem;
+  z-index: 15;
+  border: 1px solid var(--rule);
   border-radius: 999px;
-  pointer-events: none;
+  padding: 0.45rem 1.1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 14px rgb(0 0 0 / 0.18);
 }
 
-/* On a bleed plate the label sits over artwork, so it needs its own ground. */
-.plate--bleed .plate__hint {
-  color: #fff;
-  background: rgb(0 0 0 / 0.45);
+.redraw:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .plate {
-    transition: none;
-  }
+.redraw:disabled {
+  opacity: 0.6;
+  cursor: default;
 }

@@ -67,8 +67,24 @@ export function requestArt(input: { bookId: string; beatIds: string[] }) {
   });
 }
 
+/**
+ * Absolute, deliberately.
+ *
+ * Illustrations are rendered inside the book's own document, which foliate
+ * serves from a blob: URL. A root-relative path resolves against that blob
+ * origin rather than the site, so the image silently fails to load and the
+ * plate renders as an empty page.
+ */
 export function artUrl(bookId: string, beatId: string): string {
-  return `${BASE}/art/${bookId}/${beatId}`;
+  return new URL(`${BASE}/art/${bookId}/${beatId}`, window.location.origin).href;
 }
 
 export type { Beat, ReadingPosition };
+
+/** Draw a beat again when the reader doesn't like the result. */
+export function regenerateArt(input: { bookId: string; beatId: string }) {
+  return json<{ beatId: string; status: 'pending'; attempt: number }>('/art/regenerate', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}

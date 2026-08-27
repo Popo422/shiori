@@ -30,6 +30,7 @@ export async function renderBeat(
   beat: Beat,
   cast: readonly CharacterSheet[],
   places: readonly SettingSheet[] = [],
+  attempt = 0,
 ): Promise<{ key: string; width: number; height: number }> {
   const { width, height } = dimensionsFor(beat.kind);
   const prompt = buildPrompt(beat, cast, places);
@@ -39,7 +40,8 @@ export async function renderBeat(
   form.append('prompt', `${prompt}. Avoid: ${STYLE.negative}`);
   form.append('width', String(width));
   form.append('height', String(height));
-  form.append('seed', String(stableSeed(beat.id)));
+  // Attempt 0 reproduces the same image on retry; a re-roll wants a new one.
+  form.append('seed', String(stableSeed(attempt === 0 ? beat.id : `${beat.id}#${attempt}`)));
   // Positional reference slots: input_image_0..3, as binary parts.
   references.forEach((blob, i) => form.append(`input_image_${i}`, blob));
 

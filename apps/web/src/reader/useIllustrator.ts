@@ -27,6 +27,8 @@ interface Illustrator {
   pending: number;
   /** True when the beat under the reader failed to render. */
   currentFailed: boolean;
+  /** Put a beat back into rendering, after asking for it to be redrawn. */
+  markPending: (beatId: string) => void;
   onRelocate: (pos: ReadingPosition) => void;
 }
 
@@ -56,6 +58,16 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     }),
     [beatsPerScreen, entry, position],
   );
+
+  const markPending = useCallback((beatId: string) => {
+    setArt((prev) => {
+      const row = prev.get(beatId);
+      if (!row) return prev;
+      const out = new Map(prev);
+      out.set(beatId, { ...row, status: 'pending', url: null });
+      return out;
+    });
+  }, []);
 
   const onRelocate = useCallback((pos: ReadingPosition) => {
     velocity.current.record(pos);
@@ -147,6 +159,7 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     depth: lookaheadDepth(telemetry),
     pending: [...art.values()].filter((a) => a.status === 'pending').length,
     currentFailed: currentState?.status === 'failed',
+    markPending,
     onRelocate,
   };
 }

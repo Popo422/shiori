@@ -14,6 +14,8 @@ export interface FoliateHandle {
   next(): void;
   prev(): void;
   goTo(target: string | number): void;
+  /** Live documents for the sections currently rendered. */
+  documents(): { doc: Document; index: number }[];
 }
 
 interface Props {
@@ -92,6 +94,10 @@ export function FoliateView({
           next: () => view.next(),
           prev: () => view.prev(),
           goTo: (target) => view.goTo(target),
+          documents: () =>
+            (view.renderer?.getContents?.() ?? [])
+              .filter((c: any) => c?.doc)
+              .map((c: any) => ({ doc: c.doc as Document, index: c.index as number })),
         },
         {
           title: book?.metadata?.title ?? 'Untitled',

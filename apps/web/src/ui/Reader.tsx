@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Beat, ReadingPosition } from '@shiori/core';
 import { FoliateView, type FoliateHandle } from '../reader/FoliateView';
 import { useIllustrator } from '../reader/useIllustrator';
-import { Illustration } from './Illustration';
-import { analyzeSection, getBeats, registerBook, artUrl } from '../lib/api';
+import { syncPlates, visiblePlate, type PlateSource } from '../reader/plates';
+import { analyzeSection, getBeats, registerBook, regenerateArt, artUrl } from '../lib/api';
 import { estimateBeatsPerScreen } from '../lib/position';
 import { rememberLocation, updateMetadata, type StoredBook } from '../lib/db';
 import { TARGET_SPACING } from '../lib/constants';
@@ -21,7 +21,8 @@ export function Reader({ book, onClose }: Props) {
   const [fontScale, setFontScale] = useState(() => Number(stored('shiori:font', '1')));
   const [beatsPerScreen, setBeatsPerScreen] = useState(1);
   const [chromeVisible, setChromeVisible] = useState(false);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [onPlate, setOnPlate] = useState<string | null>(null);
+  const [redrawing, setRedrawing] = useState(false);
 
   const handle = useRef<FoliateHandle | null>(null);
   const analyzed = useRef<Set<number>>(new Set());
@@ -81,45 +82,48 @@ export function Reader({ book, onClose }: Props) {
   const onRelocate = useCallback(
     (pos: ReadingPosition, cfi: string | null) => {
       illustrator.onRelocate(pos);
+      const docs = handle.current?.documents() ?? [];
+      setOnPlate(docs.map(({ doc }) => visiblePlate(doc)).find(Boolean) ?? null);
       if (cfi) rememberLocation(book.id, cfi).catch(() => {});
     },
     [illustrator, book.id],
   );
 
-  const current = illustrator.current;
-  /** The plate to turn into, if the beat under the reader has art they haven't seen. */
-  const plate = current && !dismissed.has(current.beat.id) ? current : null;
-
   /**
-   * Paging forward turns into the plate first, the way a printed light novel
-   * puts art on its own page. The next turn marks it seen and continues into
-   * the text, so a plate is never shown twice.
+   * Put illustrations into the book's own document, so foliate paginates them
+   * as real pages.
+   *
+   * An overlay had to fake paging by hiding itself, which meant turning back
+   * never returned to the art. As content, a plate gets its own page in the
+   * sequence and behaves like every other page in both directions.
+   *
+   * Runs on every art change so a skeleton is replaced the moment its
+   * illustration lands.
    */
-  const goNext = useCallback(() => {
-    if (plate) {
-      setDismissed((prev) => new Set(prev).add(plate.beat.id));
-      return;
-    }
-    handle.current?.next();
-  }, [plate]);
+  useEffect(() => {
+    const docs = handle.current?.documents() ?? [];
+    if (docs.length === 0) return;
 
-  const goPrev = useCallback(() => {
-    if (plate) {
-      setDismissed((prev) => new Set(prev).add(plate.beat.id));
-      return;
-    }
-    handle.current?.prev();
-  }, [plate]);
+    const sources: PlateSource[] = beats
+      .map((beat) => {
+        const state = illustrator.ready.get(beat.id);
+        if (!state || state.status === 'failed') return null;
+        return { beat, url: state.status === 'ready' ? artUrl(book.id, beat.id) : null };
+      })
+      .filter((p): p is PlateSource => p !== null);
+
+    for (const { doc, index } of docs) syncPlates(doc, index, sources);
+  }, [beats, illustrator.ready, book.id]);
 
   // Keyboard paging, so it works on a laptop too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') goNext();
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') goPrev();
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') handle.current?.next();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') handle.current?.prev();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goNext, goPrev]);
+  }, []);
 
   return (
     <div className={`reader reader--${theme}`}>
@@ -135,18 +139,26 @@ export function Reader({ book, onClose }: Props) {
 
       {/* Tap zones: left/right page, center toggles chrome. */}
       <div className="zones" onClick={(e) => e.stopPropagation()}>
-        <button className="zone zone--prev" onClick={goPrev} aria-label="Previous page" />
+        <button className="zone zone--prev" onClick={() => handle.current?.prev()} aria-label="Previous page" />
         <button className="zone zone--menu" onClick={() => setChromeVisible((v) => !v)} aria-label="Toggle menu" />
-        <button className="zone zone--next" onClick={goNext} aria-label="Next page" />
+        <button className="zone zone--next" onClick={() => handle.current?.next()} aria-label="Next page" />
       </div>
 
-      {plate && (
-        <Illustration
-          url={plate.url ?? artUrl(book.id, plate.beat.id)}
-          beat={plate.beat}
-          onAdvance={goNext}
-          onBack={goPrev}
-        />
+      {/* Only offered while a plate is the page being looked at. */}
+      {onPlate && (
+        <button
+          className="redraw"
+          disabled={redrawing}
+          onClick={() => {
+            setRedrawing(true);
+            regenerateArt({ bookId: book.id, beatId: onPlate })
+              .then(() => illustrator.markPending(onPlate))
+              .catch(() => {})
+              .finally(() => setRedrawing(false));
+          }}
+        >
+          {redrawing ? 'Drawing…' : 'Draw again'}
+        </button>
       )}
 
       <div className={`chrome ${chromeVisible ? 'is-visible' : ''}`}>

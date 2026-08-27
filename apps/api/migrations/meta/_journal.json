@@ -22,6 +22,13 @@
       "when": 1787806829350,
       "tag": "0002_overconfident_the_hunter",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787808527056,
+      "tag": "0003_harsh_sumo",
+      "breakpoints": true
     }
   ]
 }
