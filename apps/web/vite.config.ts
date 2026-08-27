@@ -35,7 +35,11 @@ export default defineConfig({
         // re-read of a book works fully offline.
         runtimeCaching: [
           {
-            urlPattern: /\/api\/art\/.*/,
+            // Only the image endpoint: /api/art/{book}/{beat}. A looser pattern
+            // also matched /api/art/regenerate, so a re-roll got a stale cached
+            // reply and the plate never changed.
+            urlPattern: /\/api\/art\/[^/]+\/[^/]+$/,
+            method: 'GET',
             handler: 'CacheFirst',
             options: {
               cacheName: 'shiori-art',

@@ -33,8 +33,10 @@ interface Illustrator {
 }
 
 const POLL_MS = 2_500;
-/** A render that has not landed in two minutes is not going to. */
+/** How long to poll briskly before easing off. */
 const POLL_TIMEOUT_MS = 120_000;
+/** After the timeout, keep checking occasionally instead of abandoning the plate. */
+const SLOW_POLL_MS = 15_000;
 
 /**
  * Drives illustration generation from the reader's position.
@@ -136,31 +138,29 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
 
   // Poll while anything is still rendering.
   useEffect(() => {
-    if (!bookId) return;
-    const pending = [...artRef.current.values()]
-      .filter((a) => a.status === 'pending')
-      .map((a) => a.beatId);
-    if (pending.length === 0) return;
+    if (!bookId || pendingCount === 0) return;
 
     let elapsed = 0;
     const timer = setInterval(() => {
       elapsed += POLL_MS;
 
-      // Give up rather than polling a stuck render forever — an endless 2.5s
-      // interval is a real battery cost on a phone left open on one page.
-      if (elapsed >= POLL_TIMEOUT_MS) {
+      // Re-read what is pending on every tick rather than closing over the list
+      // from when the interval started. Art that began rendering afterwards was
+      // otherwise never polled for, and its plate stayed a skeleton for good.
+      const pending = [...artRef.current.values()]
+        .filter((a) => a.status === 'pending')
+        .map((a) => a.beatId);
+
+      if (pending.length === 0) {
         clearInterval(timer);
-        setArt((prev) => {
-          const out = new Map(prev);
-          for (const id of pending) {
-            const row = out.get(id);
-            if (row?.status === 'pending') out.set(id, { ...row, status: 'failed' });
-            inflight.current.delete(id);
-          }
-          return out;
-        });
         return;
       }
+
+      // Back off rather than give up. An endless 2.5s interval is a real
+      // battery cost, but marking art failed locally left a skeleton that could
+      // never recover even once the server finished — the server reclaims
+      // abandoned renders on its own, so a slow poll will eventually see them.
+      if (elapsed >= POLL_TIMEOUT_MS && elapsed % SLOW_POLL_MS !== 0) return;
 
       requestArt({ bookId, beatIds: pending })
         .then(({ art: states }) => {
