@@ -115,15 +115,32 @@ export function Reader({ book, onClose }: Props) {
     for (const { doc, index } of docs) syncPlates(doc, index, sources);
   }, [beats, illustrator.ready, book.id]);
 
+  /** Recheck after a turn settles; relocate does not fire on every page. */
+  const syncPlateControl = useCallback(() => {
+    window.setTimeout(() => {
+      const docs = handle.current?.documents() ?? [];
+      setOnPlate(docs.map(({ doc }) => visiblePlate(doc)).find(Boolean) ?? null);
+    }, 350);
+  }, []);
+
+  const turn = useCallback(
+    (direction: 1 | -1) => {
+      if (direction === 1) handle.current?.next();
+      else handle.current?.prev();
+      syncPlateControl();
+    },
+    [syncPlateControl],
+  );
+
   // Keyboard paging, so it works on a laptop too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') handle.current?.next();
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') handle.current?.prev();
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') turn(1);
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') turn(-1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [turn]);
 
   return (
     <div className={`reader reader--${theme}`}>
@@ -139,9 +156,9 @@ export function Reader({ book, onClose }: Props) {
 
       {/* Tap zones: left/right page, center toggles chrome. */}
       <div className="zones" onClick={(e) => e.stopPropagation()}>
-        <button className="zone zone--prev" onClick={() => handle.current?.prev()} aria-label="Previous page" />
+        <button className="zone zone--prev" onClick={() => turn(-1)} aria-label="Previous page" />
         <button className="zone zone--menu" onClick={() => setChromeVisible((v) => !v)} aria-label="Toggle menu" />
-        <button className="zone zone--next" onClick={() => handle.current?.next()} aria-label="Next page" />
+        <button className="zone zone--next" onClick={() => turn(1)} aria-label="Next page" />
       </div>
 
       {/* Only offered while a plate is the page being looked at. */}

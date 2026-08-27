@@ -20,12 +20,15 @@ export function dimensionsFor(kind: BeatKind) {
 
 /** House style. Changing this changes styleId, which invalidates the cache on purpose. */
 export const STYLE = {
-  id: 'ln-v1',
+  id: 'ln-v2',
   positive:
     'light novel illustration, anime style, clean cel shading, delicate linework, ' +
     'soft rim lighting, muted film-grade palette, detailed background art',
   negative:
-    'photorealistic, 3d render, watermark, signature, text, extra limbs, deformed hands',
+    'photorealistic, 3d render, watermark, signature, text, extra limbs, deformed hands, ' +
+    // Anime-trained models fall back to contemporary Japan unless told otherwise,
+    // which turned a Martian mining colony into a high school corridor.
+    'modern school uniform, classroom, contemporary city street, smartphone',
 } as const;
 
 /**
@@ -36,6 +39,7 @@ export function buildPrompt(
   beat: Beat,
   cast: readonly CharacterSheet[],
   places: readonly SettingSheet[] = [],
+  world?: string | null,
 ): string {
   const present = cast.filter((c) => beat.characterIds.includes(c.id));
   const who = present
@@ -49,8 +53,11 @@ export function buildPrompt(
 
   // Place before the beat's own sentence: it establishes the world the moment
   // happens in, so the model doesn't invent a generic room for every scene.
+  // World first: it establishes genre and era before anything else, which is
+  // what stops the model defaulting to present-day Earth.
   return [
     STYLE.positive,
+    world && `World — ${world}`,
     place && `Setting — ${place.descriptor}`,
     who && `Characters — ${who}`,
     beat.prompt,

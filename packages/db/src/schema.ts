@@ -10,6 +10,14 @@ export const books = sqliteTable('books', {
   author: text('author'),
   format: text('format', { enum: ['epub', 'pdf'] }).notNull(),
   spineCount: integer('spine_count').notNull().default(0),
+  /**
+   * The book's visual world — genre, era, technology, palette — established from
+   * its opening and prepended to every illustration prompt.
+   *
+   * Without it an anime-styled model defaults to contemporary Japan: Red Rising
+   * rendered as a modern high school instead of a Martian mining dystopia.
+   */
+  world: text('world'),
   /** Set once the whole book has been segmented into beats. */
   analyzedAt: integer('analyzed_at'),
   createdAt: integer('created_at').notNull(),

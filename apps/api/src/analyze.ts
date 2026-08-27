@@ -15,14 +15,16 @@ const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
 const PARAGRAPHS_PER_WINDOW = 120;
 
 /**
- * Illustrations per chapter.
+ * A chapter gets one illustration; a long one earns a second.
  *
- * A printed light novel carries a colour insert and a few interior plates per
- * volume, not per chapter. Since art is now a full page the reader turns
- * through, frequency is a cost: too much of it and a plate stops being an event
- * and becomes a toll booth. Two per chapter keeps it regular but scarce.
+ * Art is a full page the reader turns through, so frequency is a cost. At two
+ * per chapter regardless of length, plates arrived every few minutes and stopped
+ * feeling like events.
  */
-const BEATS_PER_SECTION = 2;
+const LONG_SECTION_PARAGRAPHS = 60;
+
+/** Minimum paragraphs between two plates, so they never share a page turn. */
+const MIN_PLATE_SPACING = 25;
 
 /**
  * Paragraph spacing used only to ask the model for candidates. We deliberately
@@ -36,7 +38,8 @@ const SYSTEM = `You identify moments in a novel that deserve an illustration, in
 Return STRICT JSON:
 {"beats":[{"paraIndex":N,"kind":"character|scene|action|item","prompt":"...","characters":["Name"],"setting":"Place Name","salience":0.0-1.0}],
  "cast":[{"name":"Name","descriptor":"physical appearance only"}],
- "places":[{"name":"Place Name","descriptor":"what the place looks like"}]}
+ "places":[{"name":"Place Name","descriptor":"what the place looks like"}],
+ "world":"genre, era, technology and palette of this book in one line"}
 
 Rules:
 - "character": a person is introduced or described for the first time.
@@ -54,7 +57,12 @@ Rules:
   (architecture, materials, light, weather, era). No events, no people. This is
   what keeps a location looking like itself across the whole book.
 - setting: on each beat, the name of the place it happens in, matching a places
-  entry. Use null if the location is not identifiable.`;
+  entry. Use null if the location is not identifiable.
+- world: the book's overall visual world — genre, era, technology level and
+  palette. Be concrete about period and place: "Martian mining colony, far-future
+  dystopia, industrial rust and helium-3 glow", not "science fiction". Every
+  illustration is anchored to this, and without it the art drifts to present-day
+  Earth.`;
 
 export async function analyzeSection(
   env: Env,
@@ -65,7 +73,7 @@ export async function analyzeSection(
   const meaningful = paragraphs
     .map((text, index) => ({ index, text }))
     .filter((p) => p.text.length > 40);
-  if (meaningful.length === 0) return { beats: [], cast: [], places: [] };
+  if (meaningful.length === 0) return { beats: [], cast: [], places: [], world: null };
 
   // A single chapter can easily exceed the model's context window, and many
   // EPUBs ship one long section per chapter. Split into windows that fit, or
@@ -76,10 +84,11 @@ export async function analyzeSection(
     windows.map((window) => analyzeWindow(env, bookId, spineIndex, window, paragraphs.length)),
   );
 
-  const beats = mostSalient(results.flatMap((r) => r.beats), BEATS_PER_SECTION);
+  const beats = selectPlates(results.flatMap((r) => r.beats), paragraphs.length);
   const cast = dedupeById(results.flatMap((r) => r.cast));
   const places = dedupeById(results.flatMap((r) => r.places));
-  return { beats, cast, places };
+  const world = results.map((r) => r.world).find(Boolean) ?? null;
+  return { beats, cast, places, world };
 }
 
 async function analyzeWindow(
@@ -110,11 +119,12 @@ async function analyzeWindow(
       beats: parseBeats(payload, bookId, spineIndex, paragraphCount),
       cast: parseCast(payload),
       places: parsePlaces(payload),
+      world: parseWorld(payload),
     };
   } catch (error) {
     // One failed window shouldn't cost the whole chapter its illustrations.
     console.error('analyze window failed:', error);
-    return { beats: [], cast: [], places: [] };
+    return { beats: [], cast: [], places: [], world: null };
   }
 }
 
@@ -228,6 +238,8 @@ export interface AnalysisResult {
   beats: Beat[];
   cast: CastEntry[];
   places: CastEntry[];
+  /** The book's visual world, as described from this section. */
+  world: string | null;
 }
 
 /** A character's physical description, harvested during section analysis. */
@@ -283,12 +295,42 @@ function parseNamedDescriptors(list: unknown): CastEntry[] {
  * this picks the moments most worth drawing rather than simply the earliest.
  * A character introduction beats a mood shift three paragraphs later.
  */
-function mostSalient(candidates: readonly Beat[], limit: number): Beat[] {
-  if (candidates.length <= limit) {
-    return [...candidates].sort((a, b) => a.paraIndex - b.paraIndex);
+function selectPlates(candidates: readonly Beat[], paragraphCount: number): Beat[] {
+  if (candidates.length === 0) return [];
+
+  // A second plate is only earned by a long chapter. A short one gets a single
+  // illustration however many candidates the model proposed.
+  const allowance = paragraphCount >= LONG_SECTION_PARAGRAPHS ? 2 : 1;
+
+  // Weight toward the back half: an illustration lands better once a scene has
+  // been established than as the opening image of a chapter.
+  const ranked = [...candidates].sort(
+    (a, b) => score(b, paragraphCount) - score(a, paragraphCount),
+  );
+
+  const chosen: Beat[] = [];
+  for (const beat of ranked) {
+    if (chosen.length >= allowance) break;
+    // Keep plates apart, so two never land on the same page turn.
+    const tooClose = chosen.some(
+      (c) => Math.abs(c.paraIndex - beat.paraIndex) < MIN_PLATE_SPACING,
+    );
+    if (!tooClose) chosen.push(beat);
   }
-  return [...candidates]
-    .sort((a, b) => b.salience - a.salience)
-    .slice(0, limit)
-    .sort((a, b) => a.paraIndex - b.paraIndex);
+
+  return chosen.sort((a, b) => a.paraIndex - b.paraIndex);
+}
+
+/** Salience, tilted toward the later part of a section. */
+function score(beat: Beat, paragraphCount: number): number {
+  const position = paragraphCount > 0 ? beat.paraIndex / paragraphCount : 0.5;
+  return beat.salience * (0.6 + 0.4 * position);
+}
+
+/** The book's visual world, used to anchor genre and era in every prompt. */
+function parseWorld(parsed: unknown): string | null {
+  const value = (parsed as { world?: unknown })?.world;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length >= 10 ? trimmed : null;
 }

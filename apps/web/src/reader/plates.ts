@@ -116,9 +116,20 @@ function ensureStyles(doc: Document): void {
 
 /** Swap a skeleton for the real image once the illustration finishes. */
 function upgrade(figure: HTMLElement, doc: Document, beat: Beat, url: string | null): void {
-  const hasImage = figure.querySelector('img') !== null;
-  if (!url || hasImage) return;
-  figure.replaceChildren(image(doc, beat, url));
+  if (!url) return;
+
+  const existing = figure.querySelector('img');
+  if (!existing) {
+    figure.replaceChildren(image(doc, beat, url));
+    return;
+  }
+
+  // An image that finished loading with no intrinsic size failed — a transient
+  // fetch error, or art requested before the render landed. Left alone it stays
+  // a blank page forever, so swap in a fresh element to retry the load.
+  if (existing.complete && existing.naturalWidth === 0) {
+    figure.replaceChildren(image(doc, beat, url));
+  }
 }
 
 function image(doc: Document, beat: Beat, url: string): HTMLElement {

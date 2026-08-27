@@ -30,10 +30,11 @@ export async function renderBeat(
   beat: Beat,
   cast: readonly CharacterSheet[],
   places: readonly SettingSheet[] = [],
+  world: string | null = null,
   attempt = 0,
 ): Promise<{ key: string; width: number; height: number }> {
   const { width, height } = dimensionsFor(beat.kind);
-  const prompt = buildPrompt(beat, cast, places);
+  const prompt = buildPrompt(beat, cast, places, world);
   const references = await loadReferences(env, beat, cast);
 
   const form = new FormData();

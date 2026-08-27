@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { drizzle } from 'drizzle-orm/d1';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, isNull } from 'drizzle-orm';
 import {
   books,
   beats,
@@ -72,7 +72,17 @@ app.post('/api/analyze', async (c) => {
     beats: found,
     cast,
     places,
+    world,
   } = await analyzeSection(c.env, bookId, spineIndex, paragraphs);
+
+  // Established once from whichever section describes it first, then reused for
+  // every illustration in the book.
+  if (world) {
+    await db
+      .update(books)
+      .set({ world })
+      .where(and(eq(books.id, bookId), isNull(books.world)));
+  }
 
   if (found.length > 0) {
     await db
@@ -360,7 +370,16 @@ async function renderAndStore(
       ? await db.select().from(settings).where(eq(settings.id, beat.settingId))
       : [];
 
-    const { key, width, height } = await renderBeat(env, beat, resolved, places, attempt);
+    const [book] = await db.select().from(books).where(eq(books.id, beat.bookId)).limit(1);
+
+    const { key, width, height } = await renderBeat(
+      env,
+      beat,
+      resolved,
+      places,
+      book?.world ?? null,
+      attempt,
+    );
 
     await db
       .update(illustrations)
