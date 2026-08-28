@@ -140,3 +140,46 @@ describe('appearanceAt', () => {
     expect(appearanceAt(late, 0)?.descriptor).toBe('appears late');
   });
 });
+
+describe('buildPrompt omitBeat — the softened retry', () => {
+  const place = {
+    id: 'book:pit',
+    bookId: 'book',
+    name: 'The Pit',
+    descriptor: 'a rust-walled mining shaft lit by sodium lamps',
+  };
+
+  it('drops a multi-sentence beat entirely', () => {
+    // The bug this guards: the retry used to rebuild itself by splitting the
+    // finished prompt on '. ', which shatters a multi-sentence beat into
+    // fragments that no longer match, so the flagged text was resent verbatim
+    // and the refusal repeated.
+    const violent = beat({
+      prompt: 'A man hangs from a scaffold. The crowd watches from below',
+      settingId: 'book:pit',
+    });
+
+    const softened = buildPrompt(violent, [], [place], 'Martian mining colony', {
+      omitBeat: true,
+    });
+
+    expect(softened).not.toContain('hangs from a scaffold');
+    expect(softened).not.toContain('crowd watches');
+  });
+
+  it('keeps the world and the setting so the place is still recognisable', () => {
+    const violent = beat({ prompt: 'A beating in the square', settingId: 'book:pit' });
+    const softened = buildPrompt(violent, [], [place], 'Martian mining colony', {
+      omitBeat: true,
+    });
+
+    expect(softened).toContain('Martian mining colony');
+    expect(softened).toContain('sodium lamps');
+    expect(softened).toContain('empty of people');
+  });
+
+  it('leaves the normal prompt untouched when not softening', () => {
+    const normal = beat({ prompt: 'a girl steps onto the platform' });
+    expect(buildPrompt(normal, [], [], null)).toContain('a girl steps onto the platform');
+  });
+});

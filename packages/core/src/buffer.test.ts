@@ -44,6 +44,15 @@ describe('lookaheadDepth', () => {
     expect(depth).toBeLessThanOrEqual(MAX_LOOKAHEAD);
   });
 
+  it('rewards a confirmed forward reader over one whose direction is unknown', () => {
+    // Guards the wiring bug where direction was always reported as 0: every
+    // reader silently took the 0.6 penalty branch and read a shallower buffer
+    // than they had earned.
+    const moving = lookaheadDepth(telemetry({ direction: 1, beatsPerScreen: 3 }));
+    const unknown = lookaheadDepth(telemetry({ direction: 0, beatsPerScreen: 3 }));
+    expect(moving).toBeGreaterThan(unknown);
+  });
+
   it('survives a zero or nonsense pace without collapsing', () => {
     expect(lookaheadDepth(telemetry({ msPerParagraph: 0 }))).toBeGreaterThan(0);
     expect(lookaheadDepth(telemetry({ msPerParagraph: Number.NaN }))).toBeGreaterThan(0);

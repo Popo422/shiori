@@ -8,6 +8,7 @@ import {
   type ReadingPosition,
 } from '@shiori/core';
 import { VelocityTracker } from '../lib/velocity';
+import { isDiscontinuous } from '../lib/position';
 import { requestArt, artUrl, type ArtState } from '../lib/api';
 
 interface Options {
@@ -52,6 +53,17 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
   const inflight = useRef<Set<string>>(new Set());
 
   /**
+   * How the reader arrived where they are now.
+   *
+   * `entry` describes only how the book was *opened*, so on its own it can never
+   * become 'jump' — a reader who skips into the middle of chapter 12 kept the
+   * confidence of the linear open they started with and generated a deep buffer
+   * into a chapter they may leave immediately. A discontinuous relocate is that
+   * jump, so it is detected here and decays back to linear as reading resumes.
+   */
+  const [arrival, setArrival] = useState<'linear' | 'jump' | 'restore'>(entry);
+
+  /**
    * Mirror of art for guard checks.
    *
    * Depending on art directly made this effect re-run on its own responses:
@@ -78,10 +90,10 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
     () => ({
       msPerParagraph: velocity.current.median(),
       beatsPerScreen,
-      entry,
-      direction: position ? velocity.current.direction(position) : 0,
+      entry: arrival,
+      direction: position ? velocity.current.direction() : 0,
     }),
-    [beatsPerScreen, entry, position],
+    [beatsPerScreen, arrival, position],
   );
 
   const markPending = useCallback((beatId: string) => {
@@ -95,7 +107,15 @@ export function useIllustrator({ bookId, beats, entry, beatsPerScreen }: Options
   }, []);
 
   const onRelocate = useCallback((pos: ReadingPosition) => {
+    const previous = velocity.current.last();
     velocity.current.record(pos);
+
+    // A move too large to be a page turn is a jump, not reading. Treat it as a
+    // cold entry: generate what is on screen and wait to see which way the
+    // reader goes, rather than spending a full buffer on a guess.
+    if (previous && isDiscontinuous(previous, pos)) setArrival('jump');
+    else setArrival((prev) => (prev === 'jump' ? 'linear' : prev));
+
     setPosition(pos);
   }, []);
 

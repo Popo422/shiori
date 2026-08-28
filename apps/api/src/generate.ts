@@ -57,7 +57,7 @@ export async function renderBeat(
     // entirely, retry once describing the moment by its setting and mood.
     if (!isFlagged(error)) throw error;
     result = (await env.AI.run(MODEL as never, {
-      multipart: toMultipart(softened(prompt, width, height, beat)),
+      multipart: toMultipart(softened(beat, cast, places, world, width, height)),
     } as never)) as { image?: string };
   }
   if (!result?.image) throw new Error('model returned no image');
@@ -178,15 +178,24 @@ function isFlagged(error: unknown): boolean {
  *
  * The beat's own sentence is what carries the violence, so an establishing shot
  * of the same setting still illustrates the scene without depicting it.
+ *
+ * Rebuilt from the same parts rather than by splitting the finished prompt: a
+ * beat prompt of more than one sentence does not survive a `split('. ')`, so
+ * the filter matched nothing and the retry resent the flagged text verbatim —
+ * which meant the moments most likely to be refused never recovered.
  */
-function softened(prompt: string, width: number, height: number, beat: Beat): FormData {
-  const setting = prompt.split('. ').filter((part) => !part.includes(beat.prompt));
-
+function softened(
+  beat: Beat,
+  cast: readonly CharacterSheet[],
+  places: readonly SettingSheet[],
+  world: string | null,
+  width: number,
+  height: number,
+): FormData {
   const form = new FormData();
   form.append(
     'prompt',
-    `${setting.join('. ')}. An establishing shot of this place, empty of people, ` +
-      `sombre and still. Avoid: ${STYLE.negative}`,
+    `${buildPrompt(beat, cast, places, world, { omitBeat: true })}. Avoid: ${STYLE.negative}`,
   );
   form.append('width', String(width));
   form.append('height', String(height));

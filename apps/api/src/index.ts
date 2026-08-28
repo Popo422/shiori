@@ -491,18 +491,4 @@ async function loadCast(
   }));
 }
 
-/** Immutably attach a freshly rendered reference sheet to one era. */
-function withReferenceKey(
-  character: CharacterSheet,
-  fromSpineIndex: number,
-  referenceKey: string,
-): CharacterSheet {
-  return {
-    ...character,
-    appearances: character.appearances.map((a) =>
-      a.fromSpineIndex === fromSpineIndex ? { ...a, referenceKey } : a,
-    ),
-  };
-}
-
 export default app;

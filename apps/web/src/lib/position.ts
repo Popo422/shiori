@@ -64,3 +64,24 @@ export function estimateBeatsPerScreen(doc: Document | null, beatSpacing: number
   const parasPerScreen = viewportHeight / avgHeight;
   return Math.max(0.25, parasPerScreen / beatSpacing);
 }
+
+/**
+ * A relocate too far to be a page turn — a table-of-contents jump, a search
+ * result, a scrub of the progress bar.
+ *
+ * Used to drop confidence back to a cold entry, so a reader who skips into the
+ * middle of the book gets only what is on screen until they show which way they
+ * are going. Reading forward off the end of one section into the start of the
+ * next is continuous, not a jump, so a section change only counts when it skips
+ * a document or lands well past the new section's beginning.
+ */
+export function isDiscontinuous(from: ReadingPosition, to: ReadingPosition): boolean {
+  const JUMP_PARAGRAPHS = 30;
+
+  if (from.spineIndex === to.spineIndex) {
+    return Math.abs(to.paraIndex - from.paraIndex) > JUMP_PARAGRAPHS;
+  }
+  // Turning the last page of a section lands at the top of the very next one.
+  const isNextSection = to.spineIndex === from.spineIndex + 1;
+  return !(isNextSection && to.paraIndex <= JUMP_PARAGRAPHS);
+}

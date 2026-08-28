@@ -34,12 +34,20 @@ export const STYLE = {
 /**
  * Build the final prompt. The beat supplies the scene; characters supply the
  * appearance descriptors that keep a cast consistent across a whole book.
+ *
+ * `omitBeat` drops the beat's own sentence and keeps the world, setting and
+ * cast. That is the softened retry for a moment the image model refuses: the
+ * violence lives in the beat sentence, so an establishing shot of the same
+ * place still illustrates the scene without depicting it. Built here from the
+ * same parts rather than by splitting the finished string, because a beat
+ * prompt of more than one sentence cannot be found again once split.
  */
 export function buildPrompt(
   beat: Beat,
   cast: readonly CharacterSheet[],
   places: readonly SettingSheet[] = [],
   world?: string | null,
+  options: { omitBeat?: boolean } = {},
 ): string {
   const present = cast.filter((c) => beat.characterIds.includes(c.id));
   const who = present
@@ -59,8 +67,12 @@ export function buildPrompt(
     STYLE.positive,
     world && `World — ${world}`,
     place && `Setting — ${place.descriptor}`,
-    who && `Characters — ${who}`,
-    beat.prompt,
+    // A softened retry keeps the world and the place but drops the people: the
+    // refusal is usually about what is being done to them.
+    !options.omitBeat && who && `Characters — ${who}`,
+    options.omitBeat
+      ? 'An establishing shot of this place, empty of people, sombre and still'
+      : beat.prompt,
   ]
     .filter(Boolean)
     .join('. ');

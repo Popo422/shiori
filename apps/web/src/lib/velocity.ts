@@ -10,6 +10,16 @@ import { compare, type ReadingPosition } from '@shiori/core';
 export class VelocityTracker {
   #samples: number[] = [];
   #last: { pos: ReadingPosition; at: number } | null = null;
+  /**
+   * Direction of the most recent move, captured as it happened.
+   *
+   * Recorded here rather than compared on demand: the reader records the new
+   * position and then asks for the direction of that same position, so a
+   * comparison against #last would always be a position against itself and
+   * report 0 forever — leaving every reader on the low-confidence path and
+   * never noticing a reader paging backwards.
+   */
+  #direction: 1 | -1 | 0 = 0;
   readonly #capacity: number;
 
   constructor(capacity = 20) {
@@ -21,6 +31,11 @@ export class VelocityTracker {
     const prev = this.#last;
     this.#last = { pos, at: now };
     if (!prev) return this.median();
+
+    // Capture travel direction before anything below returns early: a jump far
+    // enough to be discarded as a pace sample is still a direction we know.
+    const moved = compare(pos, prev.pos);
+    if (moved !== 0) this.#direction = moved > 0 ? 1 : -1;
 
     const paragraphs = Math.abs(delta(prev.pos, pos));
     if (paragraphs === 0) return this.median();
@@ -43,17 +58,20 @@ export class VelocityTracker {
       : (sorted[mid] ?? 8_000);
   }
 
-  /** +1 forward, -1 backward, 0 unknown. */
-  direction(pos: ReadingPosition): 1 | -1 | 0 {
-    const prev = this.#last;
-    if (!prev) return 0;
-    const d = compare(pos, prev.pos);
-    return d > 0 ? 1 : d < 0 ? -1 : 0;
+  /** +1 forward, -1 backward, 0 unknown. Reflects the last recorded move. */
+  direction(): 1 | -1 | 0 {
+    return this.#direction;
+  }
+
+  /** The most recently recorded position, or null before the first one. */
+  last(): ReadingPosition | null {
+    return this.#last?.pos ?? null;
   }
 
   reset(): void {
     this.#samples = [];
     this.#last = null;
+    this.#direction = 0;
   }
 }
 

@@ -13,22 +13,16 @@ export function referenceSheetKey(bookId: string, characterId: string): string {
   return `ref/${bookId}/${characterId}.jpg`;
 }
 
-/** Stable id for a beat position, so re-analysis yields the same ids. */
-export async function beatId(
-  bookId: string,
-  spineIndex: number,
-  paraIndex: number,
-): Promise<string> {
-  return (await sha256(`${bookId}:${spineIndex}:${paraIndex}`)).slice(0, 16);
-}
-
-/** Content hash of the uploaded file — identical books share art automatically. */
+/**
+ * Content hash of the uploaded file — identical books share art automatically.
+ *
+ * Beat ids are *not* hashed: they are built as `bookId-spineIndex-paraIndex` in
+ * the analyzer, which is stable for the same reason a hash would be and stays
+ * readable in a database row. Two schemes for one id invites drift, so there is
+ * only the one.
+ */
 export async function bookIdFrom(bytes: ArrayBuffer): Promise<string> {
   return (await sha256Bytes(bytes)).slice(0, 20);
-}
-
-async function sha256(input: string): Promise<string> {
-  return sha256Bytes(new TextEncoder().encode(input));
 }
 
 async function sha256Bytes(input: ArrayBuffer | Uint8Array): Promise<string> {
