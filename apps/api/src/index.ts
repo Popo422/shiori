@@ -20,6 +20,7 @@ import {
 } from '@shiori/core';
 import { analyzeSection } from './analyze';
 import { renderBeat, renderReferenceSheet } from './generate';
+import { sheetsResolved } from './resume';
 import type { Env } from './env';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -214,6 +215,25 @@ app.post('/api/art', async (c) => {
   );
   stale.forEach((row) => known.delete(row.beatId));
 
+  /**
+   * A render that stopped after drawing a reference sheet is waiting to be
+   * called back, not working.
+   *
+   * renderAndStore draws at most one sheet per invocation and returns with the
+   * row still pending, because a sheet and an illustration together overrun the
+   * 30s background budget. But a pending row is excluded from `missing` below,
+   * so nothing rescheduled it and the beat only resumed once the row aged out
+   * as stale — three minutes per sheet, and a scene introducing three
+   * characters sat as a skeleton for nine.
+   *
+   * Such a row is resumable right now: pick it up on this request instead.
+   */
+  const resumable = await resumableBeatIds(
+    db,
+    existing.filter((row) => row.status === 'pending' && !stale.includes(row)),
+  );
+  resumable.forEach((id) => known.delete(id));
+
   const missing = beatIds.filter((id) => !known.has(id));
 
   if (missing.length > 0) {
@@ -372,8 +392,11 @@ async function renderAndStore(
     // as a skeleton forever. Only character beats have sheets, which is why
     // scene beats always worked and this looked intermittent.
     //
-    // The row stays pending, so the client's next poll picks up where this left
-    // off and the illustration itself renders on that request.
+    // The row stays pending and is picked up again by the next /api/art call,
+    // which recognises a beat whose sheets are all resolved as resumable rather
+    // than in flight. That is what keeps this to one poll interval; before it,
+    // the row had to age out as stale first and a character beat cost three
+    // minutes per sheet.
     const eras = await db
       .select()
       .from(characterAppearances)
@@ -420,7 +443,7 @@ async function renderAndStore(
             );
         }
       }
-      // Leave the row pending; the next poll renders the illustration.
+      // Leave the row pending; the next poll resumes and renders the illustration.
       return;
     }
 
@@ -454,6 +477,44 @@ async function renderAndStore(
   }
 }
 
+
+/**
+ * Which of these claimed beats are parked waiting for a reference sheet.
+ *
+ * renderAndStore returns after drawing one sheet, leaving the row pending so it
+ * can be resumed. Without a way to tell that state apart from a render actually
+ * in flight, the row had to age out as stale first — which is what made a
+ * character beat take minutes while a scene beat took seconds.
+ *
+ * A beat qualifies when every character it needs already has a sheet resolved
+ * (drawn, or marked unavailable): the sheet stage is finished, so the next pass
+ * goes straight to the illustration. A beat still missing one is left alone —
+ * that sheet is being drawn right now, and this same check will release it on
+ * the following poll.
+ */
+async function resumableBeatIds(
+  db: ReturnType<typeof drizzle>,
+  claimed: readonly { beatId: string; bookId: string }[],
+): Promise<string[]> {
+  if (claimed.length === 0) return [];
+
+  const rows = await db
+    .select()
+    .from(beats)
+    .where(inArray(beats.id, claimed.map((row) => row.beatId)));
+
+  // Only character beats ever park; a beat with no cast is genuinely rendering.
+  const withCast = rows.filter((beat) => beat.characterIds.length > 0);
+  if (withCast.length === 0) return [];
+
+  const bookIds = [...new Set(withCast.map((beat) => beat.bookId))];
+  const eras = await db
+    .select()
+    .from(characterAppearances)
+    .where(inArray(characterAppearances.bookId, bookIds));
+
+  return withCast.filter((beat) => sheetsResolved(beat, eras)).map((beat) => beat.id);
+}
 
 /**
  * Assemble the cast for a beat: each character with every appearance they have,
